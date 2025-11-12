@@ -9,6 +9,12 @@ import digitalio
 import busio
 import adafruit_bitbangio as bitbangio
 import statistics
+import tempfile
+try:
+    import fcntl
+except ImportError:
+    # fcntl not available on Windows
+    fcntl = None
 
 log = logging.getLogger(__name__)
 
@@ -346,6 +352,12 @@ class Oven(threading.Thread):
         self.heat_rate_temps = []
         self.pid = PID(ki=config.pid_ki, kd=config.pid_kd, kp=config.pid_kp)
         self.catching_up = False
+        self.divergence_samples = []  # Track temp divergence for firing log
+        # Cooling estimation variables
+        self.cooling_mode = False
+        self.cooling_temps = []  # List of (timestamp, temperature) tuples
+        self.cooling_estimate = None  # Estimated time remaining (HH:MM string or None)
+        self.last_k_calculation_time = 0  # Track when we last calculated k
 
     @staticmethod
     def get_start_from_temperature(profile, temp):
@@ -395,6 +407,9 @@ class Oven(threading.Thread):
         log.info("Starting")
 
     def abort_run(self):
+        # Save firing log if we were running
+        if self.profile:
+            self.save_firing_log(status="aborted")
         self.reset()
         self.save_automatic_restart_state()
 
@@ -438,25 +453,244 @@ class Oven(threading.Thread):
             config.emergency_shutoff_temp):
             log.info("emergency!!! temperature too high")
             if config.ignore_temp_too_high == False:
-                self.abort_run()
+                # Save firing log as emergency before aborting
+                if self.profile:
+                    self.save_firing_log(status="emergency_stop")
+                self.reset()
+                self.save_automatic_restart_state()
+                return
         
         if self.board.temp_sensor.status.over_error_limit():
             log.info("emergency!!! too many errors in a short period")
             if config.ignore_tc_too_many_errors == False:
-                self.abort_run()
+                # Save firing log as emergency before aborting
+                if self.profile:
+                    self.save_firing_log(status="emergency_stop")
+                self.reset()
+                self.save_automatic_restart_state()
 
     def reset_if_schedule_ended(self):
         if self.runtime > self.totaltime:
             log.info("schedule ended, shutting down")
             log.info("total cost = %s%.2f" % (config.currency_type,self.cost))
-            self.abort_run()
+            # Save firing log as completed before transitioning to cooling
+            self.save_firing_log(status="completed")
+            # Transition to cooling mode instead of immediate reset
+            self.start_cooling()
+            self.state = "IDLE"
+            self.save_automatic_restart_state()
 
     def update_cost(self):
         if self.heat:
-            cost = (config.kwh_rate * config.kw_elements) * ((self.heat)/3600)
+            cost = (config.kwh_rate * config.kw_elements) * (self.time_step/3600)
         else:
             cost = 0
         self.cost = self.cost + cost
+    
+    def track_divergence(self):
+        """Track temperature divergence (actual vs target) for firing log analysis"""
+        try:
+            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            divergence = abs(self.target - temp)
+            self.divergence_samples.append(divergence)
+        except (AttributeError, TypeError):
+            # Handle cases where temp sensor isn't ready
+            pass
+    
+    def calculate_avg_divergence(self):
+        """Calculate average temperature divergence over the entire firing"""
+        if not self.divergence_samples:
+            return 0.0
+        return sum(self.divergence_samples) / len(self.divergence_samples)
+
+    def start_cooling(self):
+        """Initialize cooling mode after firing schedule completes"""
+        self.cooling_mode = True
+        self.cooling_temps = []
+        self.cooling_estimate = None
+        self.last_k_calculation_time = time.time()
+        log.info("Cooling mode activated - tracking temperature for estimate")
+
+    def calculate_cooling_constant(self):
+        """
+        Calculate cooling constant k using Newton's Law of Cooling
+        T(t) = T_ambient + (T_initial - T_ambient) * e^(-k*t)
+        
+        Using curve fitting on recent temperature samples to determine k.
+        Returns k value or None if insufficient data.
+        """
+        import math
+        
+        if len(self.cooling_temps) < config.cooling_min_samples:
+            return None
+        
+        # Get ambient temperature in current temp scale
+        ambient_temp = config.cooling_ambient_temp
+        if config.temp_scale.lower() == "c":
+            # Convert from F to C
+            ambient_temp = (ambient_temp - 32) * 5 / 9
+        
+        # Use linear regression on ln((T - T_ambient) / (T0 - T_ambient)) = -k*t
+        # to find k
+        try:
+            t0 = self.cooling_temps[0][0]
+            T0 = self.cooling_temps[0][1]
+            
+            # Check if already close to ambient (not enough delta to measure)
+            if abs(T0 - ambient_temp) < 10:
+                log.debug("Temperature too close to ambient for accurate k calculation")
+                return None
+            
+            # Prepare data for linear regression
+            x_values = []  # time differences
+            y_values = []  # ln((T - T_ambient) / (T0 - T_ambient))
+            
+            for timestamp, temp in self.cooling_temps:
+                delta_t = timestamp - t0
+                temp_diff = temp - ambient_temp
+                initial_diff = T0 - ambient_temp
+                
+                # Skip if temperature difference is too small or negative
+                if temp_diff <= 0 or initial_diff <= 0:
+                    continue
+                
+                ratio = temp_diff / initial_diff
+                if ratio <= 0:
+                    continue
+                
+                x_values.append(delta_t)
+                y_values.append(math.log(ratio))
+            
+            if len(x_values) < config.cooling_min_samples:
+                return None
+            
+            # Linear regression: y = mx + b, where m = -k
+            n = len(x_values)
+            sum_x = sum(x_values)
+            sum_y = sum(y_values)
+            sum_xx = sum(x * x for x in x_values)
+            sum_xy = sum(x * y for x, y in zip(x_values, y_values))
+            
+            denominator = (n * sum_xx - sum_x * sum_x)
+            if abs(denominator) < 1e-10:
+                return None
+            
+            slope = (n * sum_xy - sum_x * sum_y) / denominator
+            k = -slope  # k is the negative of the slope
+            
+            # Sanity check: k should be positive and reasonable
+            if k <= 0 or k > 1:  # k > 1 would mean cooling in < 1 second, unrealistic
+                log.debug("Calculated k=%f is out of reasonable range" % k)
+                return None
+            
+            log.debug("Calculated cooling constant k=%f" % k)
+            return k
+            
+        except (ValueError, ZeroDivisionError, OverflowError) as e:
+            log.error("Error calculating cooling constant: %s" % e)
+            return None
+
+    def estimate_time_to_target(self, current_temp, k):
+        """
+        Calculate estimated time (in seconds) to reach target temperature
+        using Newton's Law of Cooling: T(t) = T_ambient + (T_current - T_ambient) * e^(-k*t)
+        
+        Solving for t: t = -ln((T_target - T_ambient) / (T_current - T_ambient)) / k
+        """
+        import math
+        
+        # Get temperatures in current temp scale
+        target_temp = config.cooling_target_temp
+        ambient_temp = config.cooling_ambient_temp
+        
+        if config.temp_scale.lower() == "c":
+            # Convert from F to C
+            target_temp = (target_temp - 32) * 5 / 9
+            ambient_temp = (ambient_temp - 32) * 5 / 9
+        
+        # Check if already at or below target
+        if current_temp <= target_temp:
+            return 0
+        
+        # Calculate time
+        try:
+            numerator = target_temp - ambient_temp
+            denominator = current_temp - ambient_temp
+            
+            if denominator <= 0 or numerator <= 0:
+                return None
+            
+            ratio = numerator / denominator
+            if ratio <= 0 or ratio > 1:
+                return None
+            
+            time_seconds = -math.log(ratio) / k
+            
+            # Sanity check: shouldn't be negative or unreasonably large
+            if time_seconds < 0 or time_seconds > 86400 * 7:  # 7 days max
+                return None
+            
+            return time_seconds
+            
+        except (ValueError, ZeroDivisionError, OverflowError) as e:
+            log.error("Error estimating time to target: %s" % e)
+            return None
+
+    def format_cooling_time(self, seconds):
+        """Convert seconds to HH:MM format"""
+        if seconds is None or seconds < 0:
+            return None
+        
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        
+        return "%02d:%02d" % (hours, minutes)
+
+    def update_cooling_estimate(self):
+        """Update cooling estimate based on recent temperature readings"""
+        try:
+            # Get current temperature
+            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            current_time = time.time()
+            
+            # Add current temperature to tracking list
+            self.cooling_temps.append((current_time, current_temp))
+            
+            # Keep only recent samples (last 30 minutes worth)
+            max_samples = 900  # 30 min * 60 sec / 2 sec per sample
+            if len(self.cooling_temps) > max_samples:
+                self.cooling_temps = self.cooling_temps[-max_samples:]
+            
+            # Check if temperature is already below target
+            target_temp = config.cooling_target_temp
+            if config.temp_scale.lower() == "c":
+                target_temp = (target_temp - 32) * 5 / 9
+            
+            if current_temp <= target_temp:
+                self.cooling_estimate = "Ready"
+                return
+            
+            # Calculate or recalculate k every 2-3 minutes
+            recalc_interval = 150  # 2.5 minutes
+            if (current_time - self.last_k_calculation_time) >= recalc_interval:
+                k = self.calculate_cooling_constant()
+                if k is not None:
+                    # Estimate time to target
+                    time_remaining = self.estimate_time_to_target(current_temp, k)
+                    if time_remaining is not None:
+                        self.cooling_estimate = self.format_cooling_time(time_remaining)
+                        self.last_k_calculation_time = current_time
+                    else:
+                        self.cooling_estimate = "Calculating..."
+                else:
+                    self.cooling_estimate = "Calculating..."
+            # If we haven't recalculated yet, keep the previous estimate or show "Calculating..."
+            elif self.cooling_estimate is None:
+                self.cooling_estimate = "Calculating..."
+                
+        except (AttributeError, TypeError) as e:
+            log.error("Error updating cooling estimate: %s" % e)
+            self.cooling_estimate = None
 
     def get_state(self):
         temp = 0
@@ -483,12 +717,52 @@ class Oven(threading.Thread):
             'profile': self.profile.name if self.profile else None,
             'pidstats': self.pid.pidstats,
             'catching_up': self.catching_up,
+            'door': 'CLOSED',
+            'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
         }
         return state
 
     def save_state(self):
-        with open(config.automatic_restart_state_file, 'w', encoding='utf-8') as f:
-            json.dump(self.get_state(), f, ensure_ascii=False, indent=4)
+        """Save state to file with atomic write"""
+        try:
+            # Write to temporary file in same directory (ensures same filesystem)
+            temp_fd, temp_path = tempfile.mkstemp(
+                dir=os.path.dirname(config.automatic_restart_state_file),
+                prefix='.tmp_state_',
+                suffix='.json'
+            )
+            
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                # Optional: Lock the file for exclusive access
+                if fcntl is not None:
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    except (AttributeError, OSError):
+                        pass
+                
+                try:
+                    json.dump(self.get_state(), f, ensure_ascii=False, indent=4)
+                    f.flush()
+                    os.fsync(f.fileno())  # Force write to disk
+                finally:
+                    if fcntl is not None:
+                        try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        except (AttributeError, OSError):
+                            pass
+            
+            # Atomic rename (overwrites old file if exists)
+            # On POSIX systems, this is atomic
+            os.replace(temp_path, config.automatic_restart_state_file)
+            
+        except Exception as e:
+            log.error("Failed to save state: %s" % e)
+            # Clean up temp file if it exists
+            try:
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except:
+                pass
 
     def state_file_is_old(self):
         '''returns True is state files is older than 15 mins default
@@ -508,8 +782,88 @@ class Oven(threading.Thread):
         if not config.automatic_restarts == True:
             return False
         self.save_state()
+    
+    def save_firing_log(self, status="completed"):
+        """Save a complete firing log to disk with temperature data and statistics"""
+        if not self.profile:
+            log.info("No profile to save - firing log not created")
+            return False
+        
+        try:
+            # Get temperature log from ovenwatcher
+            temp_log = []
+            if hasattr(self, 'ovenwatcher') and self.ovenwatcher.last_log:
+                # Subsample to reasonable size (max 500 points)
+                temp_log = self.ovenwatcher.lastlog_subset(maxpts=500)
+                # Extract only needed fields
+                temp_log = [{
+                    'runtime': round(entry.get('runtime', 0), 2),
+                    'temperature': round(entry.get('temperature', 0), 2),
+                    'target': round(entry.get('target', 0), 2)
+                } for entry in temp_log]
+            
+            # Calculate statistics
+            avg_divergence = self.calculate_avg_divergence()
+            
+            # Get final temperature
+            final_temp = 0
+            try:
+                final_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            except (AttributeError, TypeError):
+                pass
+            
+            # Create firing log data structure
+            firing_log = {
+                'profile_name': self.profile.name,
+                'start_time': self.start_time.isoformat() if self.start_time else None,
+                'end_time': datetime.datetime.now().isoformat(),
+                'duration_seconds': int(self.runtime),
+                'final_cost': round(self.cost, 2),
+                'final_temperature': round(final_temp, 2),
+                'avg_divergence': round(avg_divergence, 2),
+                'currency_type': config.currency_type,
+                'temp_scale': config.temp_scale,
+                'status': status,
+                'temperature_log': temp_log
+            }
+            
+            # Save to firing logs directory
+            os.makedirs(config.firing_logs_directory, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            safe_profile_name = "".join(c for c in self.profile.name if c.isalnum() or c in (' ', '-', '_')).strip()
+            filename = f"{timestamp}_{safe_profile_name}.json"
+            filepath = os.path.join(config.firing_logs_directory, filename)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(firing_log, f, ensure_ascii=False, indent=2)
+            
+            log.info(f"Firing log saved: {filepath}")
+            
+            # Also save as "last firing" summary
+            last_firing_summary = {
+                'profile_name': self.profile.name,
+                'end_time': firing_log['end_time'],
+                'duration_seconds': firing_log['duration_seconds'],
+                'final_cost': firing_log['final_cost'],
+                'avg_divergence': firing_log['avg_divergence'],
+                'currency_type': config.currency_type,
+                'temp_scale': config.temp_scale,
+                'status': status,
+                'log_filename': filename
+            }
+            
+            with open(config.last_firing_file, 'w', encoding='utf-8') as f:
+                json.dump(last_firing_summary, f, ensure_ascii=False, indent=2)
+            
+            log.info(f"Last firing summary saved: {config.last_firing_file}")
+            return True
+            
+        except Exception as e:
+            log.error(f"Failed to save firing log: {e}")
+            return False
 
     def should_i_automatic_restart(self):
+        """Read state file with error handling"""
         # only automatic restart if the feature is enabled
         if not config.automatic_restarts == True:
             return False
@@ -517,12 +871,36 @@ class Oven(threading.Thread):
             duplog.info("automatic restart not possible. state file does not exist or is too old.")
             return False
 
-        with open(config.automatic_restart_state_file) as infile:
-            d = json.load(infile)
-        if d["state"] != "RUNNING":
-            duplog.info("automatic restart not possible. state = %s" % (d["state"]))
+        try:
+            with open(config.automatic_restart_state_file, 'r') as infile:
+                # Optional: Shared read lock
+                if fcntl is not None:
+                    try:
+                        fcntl.flock(infile.fileno(), fcntl.LOCK_SH)
+                    except (AttributeError, OSError):
+                        pass
+                
+                try:
+                    d = json.load(infile)
+                finally:
+                    if fcntl is not None:
+                        try:
+                            fcntl.flock(infile.fileno(), fcntl.LOCK_UN)
+                        except (AttributeError, OSError):
+                            pass
+            
+            if d.get("state") != "RUNNING":
+                duplog.info("automatic restart not possible. state = %s" % d.get("state"))
+                return False
+            
+            return True
+            
+        except (IOError, ValueError, json.JSONDecodeError) as e:
+            log.error("Failed to read state file: %s" % e)
             return False
-        return True
+        except Exception as e:
+            log.error("Unexpected error reading state file: %s" % e)
+            return False
 
     def automatic_restart(self):
         with open(config.automatic_restart_state_file) as infile: d = json.load(infile)
@@ -549,6 +927,27 @@ class Oven(threading.Thread):
             if self.state == "IDLE":
                 if self.should_i_automatic_restart() == True:
                     self.automatic_restart()
+                else:
+                    # Check if we should activate cooling mode
+                    try:
+                        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                        target_temp = config.cooling_target_temp
+                        if config.temp_scale.lower() == "c":
+                            target_temp = (target_temp - 32) * 5 / 9
+                        
+                        # Activate cooling mode if above target temp
+                        if current_temp > target_temp:
+                            if not self.cooling_mode:
+                                self.start_cooling()
+                            self.update_cooling_estimate()
+                        else:
+                            # Below target temp, disable cooling mode
+                            if self.cooling_mode:
+                                self.cooling_mode = False
+                                self.cooling_estimate = None
+                    except (AttributeError, TypeError):
+                        pass
+                        
                 time.sleep(1)
                 continue
             if self.state == "PAUSED":
@@ -561,6 +960,7 @@ class Oven(threading.Thread):
                 continue
             if self.state == "RUNNING":
                 self.update_cost()
+                self.track_divergence()
                 self.save_automatic_restart_state()
                 self.kiln_must_catch_up()
                 self.update_runtime()
@@ -741,28 +1141,65 @@ class Profile():
     #  x = (y-y1)(x2-x1)/(y2-y1) + x1
     @staticmethod
     def find_x_given_y_on_line_from_two_points(y, point1, point2):
-        if point1[0] > point2[0]: return 0  # time2 before time1 makes no sense in kiln segment
-        if point1[1] >= point2[1]: return 0 # Zero will crach. Negative temeporature slope, we don't want to seek a time.
-        x = (y - point1[1]) * (point2[0] -point1[0] ) / (point2[1] - point1[1]) + point1[0]
+        """
+        Find x (time) given y (temperature) on a line defined by two points.
+        
+        Returns:
+            float: Time value if successful
+            None: If points are invalid, slope is non-positive, or y is out of range
+        """
+        # Validate point order
+        if point1[0] > point2[0]:
+            log.debug("Points in wrong order: time2 before time1")
+            return None
+        
+        # Validate temperature slope (must be increasing)
+        if point1[1] >= point2[1]:
+            log.debug("Flat or negative temperature slope, cannot seek")
+            return None
+        
+        # Check if y is in range
+        if y < point1[1] or y > point2[1]:
+            log.debug("Temperature %s outside segment range [%s, %s]" % 
+                      (y, point1[1], point2[1]))
+            return None
+        
+        # Calculate x
+        x = (y - point1[1]) * (point2[0] - point1[0]) / (point2[1] - point1[1]) + point1[0]
         return x
 
     def find_next_time_from_temperature(self, temperature):
-        time = 0 # The seek function will not do anything if this returns zero, no useful intersection was found
+        """Find the time when temperature is reached in the profile"""
+        time = 0  # Default if no intersection found
         for index, point2 in enumerate(self.data):
             if point2[1] >= temperature:
-                if index > 0: #  Zero here would be before the first segment
-                    if self.data[index - 1][1] <= temperature: # We have an intersection
-                        time = self.find_x_given_y_on_line_from_two_points(temperature, self.data[index - 1], point2)
-                        if time == 0:
-                            if self.data[index - 1][1] == point2[1]: # It's a flat segment that matches the temperature
-                                time = self.data[index - 1][0]
-                                break
-
+                if index > 0:
+                    if self.data[index - 1][1] <= temperature:
+                        result = self.find_x_given_y_on_line_from_two_points(
+                            temperature, self.data[index - 1], point2)
+                        
+                        # Check for None instead of 0
+                        if result is not None:
+                            time = result
+                            break
+                        elif self.data[index - 1][1] == point2[1]:
+                            # Flat segment that matches temperature
+                            time = self.data[index - 1][0]
+                            break
+                        # else: result is None (error), keep time=0
         return time
 
     def get_surrounding_points(self, time):
         if time > self.get_duration():
             return (None, None)
+        
+        # Handle time at or past final point
+        if time >= self.data[-1][0]:
+            if len(self.data) >= 2:
+                return (self.data[-2], self.data[-1])
+            else:
+                # Single point profile
+                return (self.data[0], self.data[0])
 
         prev_point = None
         next_point = None
@@ -780,6 +1217,15 @@ class Profile():
             return 0
 
         (prev_point, next_point) = self.get_surrounding_points(time)
+        
+        # Defensive check - should never happen with above fix
+        if prev_point is None or next_point is None:
+            log.error("get_surrounding_points returned None for time=%s" % time)
+            return 0
+        
+        # Handle identical points (flat segment at end)
+        if next_point[0] == prev_point[0]:
+            return prev_point[1]
 
         incl = float(next_point[1] - prev_point[1]) / float(next_point[0] - prev_point[0])
         temp = prev_point[1] + (time - prev_point[0]) * incl
@@ -830,11 +1276,31 @@ class PID():
                     output = config.throttle_percent/100
                     log.info("max heating throttled at %d percent below %d degrees to prevent overshoot" % (config.throttle_percent,config.throttle_below_temp))
         else:
-            icomp = (error * timeDelta * (1/self.ki))
-            self.iterm += (error * timeDelta * (1/self.ki))
+            # Proportional term
+            p_term = self.kp * error
+            
+            # Derivative term
             dErr = (error - self.lastErr) / timeDelta
-            output = self.kp * error + self.iterm + self.kd * dErr
-            output = sorted([-1 * window_size, output, window_size])[1]
+            d_term = self.kd * dErr
+            
+            # Calculate integral contribution (but don't add to iterm yet)
+            i_contribution = error * timeDelta * (1/self.ki)
+            
+            # Calculate output before clamping
+            output_unclamped = p_term + self.iterm + d_term
+            
+            # Clamp output to limits
+            output = sorted([-1 * window_size, output_unclamped, window_size])[1]
+            
+            # Anti-windup: Only accumulate integral if output is not saturated
+            # This prevents integral windup during saturation
+            if output_unclamped == output:
+                # Output is not saturated, safe to accumulate
+                self.iterm += i_contribution
+            else:
+                # Output is saturated, don't accumulate more integral
+                log.debug("PID output saturated at %.2f, preventing integral windup" % output)
+            
             out4logs = output
             output = float(output / window_size)
             

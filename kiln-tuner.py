@@ -188,12 +188,23 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--target_temp', type=float, default=400, help="Target temperature")
     parser.add_argument('-d', '--tangent_divisor', type=float, default=8, help="Adjust the tangent calculation to fit better. Must be >= 2 (default 8).")
     parser.add_argument('-s', '--showplot', action='store_true', help="draw plot so you can see tanget line and possibly change")
+    parser.add_argument('--input-scale', type=str, 
+                        default=config.temp_scale.lower(),
+                        choices=['c', 'f'],
+                        help="Scale of input temperature (default: matches config)")
     args = parser.parse_args()
 
     csvfile = "tuning.csv"
     target = args.target_temp
-    if config.temp_scale.lower() == "c":
-        target = (target - 32)*5/9
+    
+    # Convert temperature if input scale differs from config scale
+    if args.input_scale.lower() == 'f' and config.temp_scale.lower() == 'c':
+        # Input is F, config is C - convert to C
+        target = (target - 32) * 5 / 9
+    elif args.input_scale.lower() == 'c' and config.temp_scale.lower() == 'f':
+        # Input is C, config is F - convert to F
+        target = (target * 9 / 5) + 32
+    
     tangentdivisor = args.tangent_divisor 
 
     # default behavior is to record profile to csv file tuning.csv

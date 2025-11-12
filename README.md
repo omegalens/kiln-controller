@@ -129,7 +129,7 @@ There is a state view that can help with tuning. It shows the P,I, and D paramet
 ### Autostart Server onBoot
 If you want the server to autostart on boot, run the following command:
 
-    $ /home/pi/kiln-controller/start-on-boot
+    $ /home/user/kiln-controller/start-on-boot
 
 ### Client Access
 

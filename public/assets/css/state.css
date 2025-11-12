@@ -45,3 +45,116 @@
   color: #0000CC;
   font-size: 20pt;
 }
+
+/* ============================================
+   MOBILE RESPONSIVE STYLES
+   ============================================ */
+
+/* Tablet and Mobile (< 768px) */
+@media (max-width: 768px) {
+  .container {
+    width: 100% !important;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 2px auto;
+  }
+  
+  .stat {
+    font-size: 30pt;
+    min-width: 100px;
+    flex: 1 1 auto;
+  }
+  
+  .stattxt {
+    font-size: 30pt;
+    width: 100%;
+    text-align: center;
+    margin-bottom: 4px;
+  }
+  
+  .top {
+    font-size: 14pt;
+    padding: 3px;
+  }
+  
+  .bottom {
+    font-size: 16pt;
+    padding: 3px;
+  }
+}
+
+/* Small Phones (< 480px) */
+@media (max-width: 480px) {
+  .container {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .stat {
+    font-size: 24pt;
+    width: 100%;
+    margin: 2px 0;
+  }
+  
+  .stattxt {
+    font-size: 24pt;
+    padding: 5px;
+  }
+  
+  .top {
+    font-size: 12pt;
+    padding: 2px;
+  }
+  
+  .bottom {
+    font-size: 14pt;
+    padding: 2px;
+  }
+}
+
+/* Very Small Phones (< 360px) */
+@media (max-width: 360px) {
+  .stat {
+    font-size: 20pt;
+  }
+  
+  .stattxt {
+    font-size: 20pt;
+  }
+  
+  .top {
+    font-size: 10pt;
+  }
+  
+  .bottom {
+    font-size: 12pt;
+  }
+}
+
+/* Landscape Mode Optimization */
+@media (max-width: 768px) and (orientation: landscape) {
+  .container {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  
+  .stat {
+    font-size: 20pt;
+    flex: 0 1 auto;
+    min-width: 80px;
+  }
+  
+  .stattxt {
+    font-size: 20pt;
+    width: auto;
+    padding: 3px 6px;
+  }
+  
+  .top {
+    font-size: 10pt;
+  }
+  
+  .bottom {
+    font-size: 12pt;
+  }
+}

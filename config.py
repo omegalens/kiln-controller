@@ -265,7 +265,12 @@ automatic_restart_state_file = os.path.abspath(os.path.join(os.path.dirname( __f
 # to load profiles from this repository by default.
 # See https://github.com/jbruce12000/kiln-profiles
 kiln_profiles_directory = os.path.abspath(os.path.join(os.path.dirname( __file__ ),"storage", "profiles")) 
-#kiln_profiles_directory = os.path.abspath(os.path.join(os.path.dirname( __file__ ),'..','kiln-profiles','pottery')) 
+#kiln_profiles_directory = os.path.abspath(os.path.join(os.path.dirname( __file__ ),'..','kiln-profiles','pottery'))
+
+########################################################################
+# firing logs directory - stores historical firing data
+firing_logs_directory = os.path.abspath(os.path.join(os.path.dirname( __file__ ),"storage", "firing_logs"))
+last_firing_file = os.path.abspath(os.path.join(os.path.dirname( __file__ ),"storage", "last_firing.json")) 
 
 
 ########################################################################
@@ -277,3 +282,11 @@ kiln_profiles_directory = os.path.abspath(os.path.join(os.path.dirname( __file__
 # To prevent throttling, set throttle_percent to 100.
 throttle_below_temp = 300
 throttle_percent = 20
+
+########################################################################
+# Cooling time estimation
+# After a firing schedule completes, the system estimates time to reach
+# a safe opening temperature using Newton's Law of Cooling
+cooling_ambient_temp = 65  # Fahrenheit - assumed room temperature outside kiln
+cooling_target_temp = 100  # Fahrenheit - temperature considered safe to open kiln
+cooling_min_samples = 15   # Minimum temperature samples before calculating estimate

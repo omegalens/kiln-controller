@@ -80,12 +80,12 @@ class OvenWatcher(threading.Thread):
         message_json = json.dumps(message)
         log.debug("sending to %d clients: %s"%(len(self.observers),message_json))
 
-        for wsock in self.observers:
+        for wsock in self.observers[:]:
             if wsock:
                 try:
                     wsock.send(message_json)
-                except:
-                    log.error("could not write to socket %s"%wsock)
+                except Exception as e:
+                    log.error("could not write to socket %s: %s" % (wsock, e))
                     self.observers.remove(wsock)
             else:
                 self.observers.remove(wsock)

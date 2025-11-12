@@ -12,7 +12,9 @@ var time_scale_profile = "h";
 var time_scale_long = "Seconds";
 var temp_scale_display = "C";
 var kwh_rate = 0.26;
+var kw_elements = 9.460;
 var currency_type = "EUR";
+var last_firing_data = null;
 
 var protocol = 'ws:';
 if (window.location.protocol == 'https:') {
@@ -51,7 +53,7 @@ function updateProfile(id)
     selected_profile = id;
     selected_profile_name = profiles[id].name;
     var job_seconds = profiles[id].data.length === 0 ? 0 : parseInt(profiles[id].data[profiles[id].data.length-1][0]);
-    var kwh = (3850*job_seconds/3600/1000).toFixed(2);
+    var kwh = (kw_elements * job_seconds / 3600).toFixed(2);
     var cost =  (kwh*kwh_rate).toFixed(2);
     var job_time = new Date(job_seconds * 1000).toISOString().substr(11, 8);
     $('#sel_prof').html(profiles[id].name);
@@ -455,6 +457,73 @@ function getOptions()
 
 }
 
+function fetchLastFiring()
+{
+    $.ajax({
+        url: '/api/last_firing',
+        type: 'GET',
+        dataType: 'json',
+        success: function(data) {
+            if (data && !data.error) {
+                last_firing_data = data;
+                displayLastFiring(data);
+            } else {
+                $('#last_firing_panel').hide();
+            }
+        },
+        error: function() {
+            $('#last_firing_panel').hide();
+        }
+    });
+}
+
+function displayLastFiring(data)
+{
+    if (!data || data.error) {
+        $('#last_firing_panel').hide();
+        return;
+    }
+
+    // Format duration
+    var duration_str = new Date(data.duration_seconds * 1000).toISOString().substr(11, 8);
+    
+    // Format timestamp
+    var end_time = new Date(data.end_time);
+    var timestamp_str = end_time.toLocaleString();
+    
+    // Format status with appropriate styling
+    var status_str = data.status || 'completed';
+    var status_html = '<span class="label label-';
+    if (status_str === 'completed') {
+        status_html += 'success">Completed';
+    } else if (status_str === 'aborted') {
+        status_html += 'warning">Aborted';
+    } else if (status_str === 'emergency_stop') {
+        status_html += 'danger">Emergency Stop';
+    } else {
+        status_html += 'default">' + status_str;
+    }
+    status_html += '</span>';
+    
+    // Update fields
+    $('#last_firing_profile').text(data.profile_name || '-');
+    $('#last_firing_status').html(status_html);
+    $('#last_firing_duration').text(duration_str);
+    $('#last_firing_cost').text((data.currency_type || '$') + ' ' + (data.final_cost || 0).toFixed(2));
+    $('#last_firing_divergence').text((data.avg_divergence || 0).toFixed(2) + '°' + (data.temp_scale === 'f' ? 'F' : 'C'));
+    $('#last_firing_timestamp').text(timestamp_str);
+    
+    // Show panel only when in IDLE state
+    if (state === 'IDLE') {
+        $('#last_firing_panel').slideDown();
+    }
+}
+
+function hideLastFiring()
+{
+    $('#last_firing_panel').slideUp();
+}
+
 
 
 $(document).ready(function()
@@ -543,6 +612,8 @@ $(document).ready(function()
                         allow_dismiss: true,
                         stackup_spacing: 10 // spacing between consecutively stacked growls.
                         });
+                        // Fetch and display last firing results
+                        setTimeout(fetchLastFiring, 1000);
                     }
                 }
 
@@ -550,6 +621,7 @@ $(document).ready(function()
                 {
                     $("#nav_start").hide();
                     $("#nav_stop").show();
+                    hideLastFiring();  // Hide last firing panel while running
 
                     graph.live.data.push([x.runtime, x.temperature]);
                     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
@@ -569,7 +641,24 @@ $(document).ready(function()
                 {
                     $("#nav_start").show();
                     $("#nav_stop").hide();
-                    $('#state').html('<p class="ds-text">'+state+'</p>');
+                    
+                    // Handle cooling estimate display inline with state
+                    var stateHtml = '<p class="ds-text">'+state+'</p>';
+                    if(x.cooling_estimate) {
+                        var coolingText = '';
+                        if(x.cooling_estimate === 'Ready' || x.cooling_estimate === 'Calculating...') {
+                            coolingText = x.cooling_estimate;
+                        } else {
+                            coolingText = x.cooling_estimate + ' time to 100°F';
+                        }
+                        stateHtml = '<p class="ds-text">'+state+'<span id="cooling_estimate" style="display:inline; margin-left: 10px; font-size: 0.8em;">' + coolingText + '</span></p>';
+                    }
+                    $('#state').html(stateHtml);
+                    
+                    // Show last firing panel when idle
+                    if(state == "IDLE" && last_firing_data) {
+                        displayLastFiring(last_firing_data);
+                    }
                 }
 
                 $('#act_temp').html(parseInt(x.temperature));
@@ -605,6 +694,7 @@ $(document).ready(function()
             time_scale_slope = x.time_scale_slope;
             time_scale_profile = x.time_scale_profile;
             kwh_rate = x.kwh_rate;
+            kw_elements = x.kw_elements;
             currency_type = x.currency_type;
 
             if (temp_scale == "c") {temp_scale_display = "C";} else {temp_scale_display = "F";}
@@ -612,7 +702,7 @@ $(document).ready(function()
 
             $('#act_temp_scale').html('º'+temp_scale_display);
             $('#target_temp_scale').html('º'+temp_scale_display);
-            $('#heat_rate_temp_scale').html('º'+temp_scale_display);
+            $('#heat_rate_temp_scale').html('º'+temp_scale_display+'/hr');
 
             switch(time_scale_profile){
                 case "s":
@@ -722,6 +812,9 @@ $(document).ready(function()
         {
             updateProfile(e.val);
         });
+
+        // Fetch last firing data on page load
+        fetchLastFiring();
 
     }
 });

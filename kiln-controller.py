@@ -58,61 +58,80 @@ def handle_api():
 
 @app.post('/api')
 def handle_api():
-    log.info("/api is alive")
-
-
-    # run a kiln schedule
-    if bottle.request.json['cmd'] == 'run':
-        wanted = bottle.request.json['profile']
+    log.info("/api command received")
+    
+    # Validate request has JSON
+    if not bottle.request.json:
+        return {"success": False, "error": "No JSON data provided"}
+    
+    # Validate cmd field exists
+    if 'cmd' not in bottle.request.json:
+        return {"success": False, "error": "No cmd field in request"}
+    
+    cmd = bottle.request.json['cmd']
+    
+    # Use elif for mutually exclusive commands
+    if cmd == 'run':
+        wanted = bottle.request.json.get('profile')
+        if not wanted:
+            return {"success": False, "error": "No profile specified"}
+        
         log.info('api requested run of profile = %s' % wanted)
-
-        # start at a specific minute in the schedule
-        # for restarting and skipping over early parts of a schedule
-        startat = 0;      
-        if 'startat' in bottle.request.json:
-            startat = bottle.request.json['startat']
-
-        #Shut off seek if start time has been set
+        
+        # Start at a specific minute
+        startat = bottle.request.json.get('startat', 0)
+        
+        # Shut off seek if start time has been set
         allow_seek = True
         if startat > 0:
             allow_seek = False
-
-        # get the wanted profile/kiln schedule
+        
         profile = find_profile(wanted)
         if profile is None:
-            return { "success" : False, "error" : "profile %s not found" % wanted }
-
-        # FIXME juggling of json should happen in the Profile class
+            return {"success": False, "error": "profile %s not found" % wanted}
+        
         profile_json = json.dumps(profile)
         profile = Profile(profile_json)
         oven.run_profile(profile, startat=startat, allow_seek=allow_seek)
         ovenWatcher.record(profile)
-
-    if bottle.request.json['cmd'] == 'pause':
+        return {"success": True}
+    
+    elif cmd == 'pause':
         log.info("api pause command received")
-        oven.state = 'PAUSED'
-
-    if bottle.request.json['cmd'] == 'resume':
+        if oven.state == 'RUNNING':
+            oven.state = 'PAUSED'
+            return {"success": True}
+        else:
+            return {"success": False, "error": "Cannot pause, oven state is %s" % oven.state}
+    
+    elif cmd == 'resume':
         log.info("api resume command received")
-        oven.state = 'RUNNING'
-
-    if bottle.request.json['cmd'] == 'stop':
+        if oven.state == 'PAUSED':
+            oven.state = 'RUNNING'
+            return {"success": True}
+        else:
+            return {"success": False, "error": "Cannot resume, oven state is %s" % oven.state}
+    
+    elif cmd == 'stop':
         log.info("api stop command received")
         oven.abort_run()
-
-    if bottle.request.json['cmd'] == 'memo':
+        return {"success": True}
+    
+    elif cmd == 'memo':
         log.info("api memo command received")
-        memo = bottle.request.json['memo']
-        log.info("memo=%s" % (memo))
-
-    # get stats during a run
-    if bottle.request.json['cmd'] == 'stats':
+        memo = bottle.request.json.get('memo', '')
+        log.info("memo=%s" % memo)
+        return {"success": True}
+    
+    elif cmd == 'stats':
         log.info("api stats command received")
-        if hasattr(oven,'pid'):
-            if hasattr(oven.pid,'pidstats'):
-                return json.dumps(oven.pid.pidstats)
-
-    return { "success" : True }
+        if hasattr(oven, 'pid') and hasattr(oven.pid, 'pidstats'):
+            return json.dumps(oven.pid.pidstats)
+        else:
+            return {"success": False, "error": "No PID stats available"}
+    
+    else:
+        return {"success": False, "error": "Unknown command: %s" % cmd}
 
 def find_profile(wanted):
     '''
@@ -272,7 +291,15 @@ def get_profiles():
 
 
 def save_profile(profile, force=False):
-    profile=add_temp_units(profile)
+    """Save profile to disk in Fahrenheit (standard format)"""
+    # Ensure profile has temp_units
+    profile = add_temp_units(profile)
+    
+    # Convert to Fahrenheit for storage if needed (maintain F as standard)
+    if profile['temp_units'] == "c":
+        profile = convert_to_f(profile)
+        profile['temp_units'] = "f"
+    
     profile_json = json.dumps(profile)
     filename = profile['name']+".json"
     filepath = os.path.join(profile_path, filename)
@@ -287,42 +314,68 @@ def save_profile(profile, force=False):
 
 def add_temp_units(profile):
     """
-    always store the temperature in degrees c
-    this way folks can share profiles
+    Ensures profile has temp_units field.
+    
+    Policy:
+    - If profile already has temp_units, trust it (idempotent)
+    - If profile lacks temp_units, assume it's in Fahrenheit (matches existing profiles)
+    - This function only adds metadata, doesn't convert data
     """
-    if "temp_units" in profile:
-        return profile
-    profile['temp_units']="c"
-    if config.temp_scale=="c":
-        return profile
-    if config.temp_scale=="f":
-        profile=convert_to_c(profile);
-        return profile
+    if "temp_units" not in profile:
+        profile['temp_units'] = "f"  # Assume Fahrenheit (default storage format)
+    return profile
 
 def convert_to_c(profile):
-    newdata=[]
-    for (secs,temp) in profile["data"]:
-        temp = (5/9)*(temp-32)
-        newdata.append((secs,temp))
-    profile["data"]=newdata
+    """Convert profile temperatures from Fahrenheit to Celsius"""
+    # Only convert if not already in Celsius (idempotent)
+    if profile.get("temp_units") == "c":
+        return profile
+    
+    newdata = []
+    for (secs, temp) in profile["data"]:
+        temp_c = (temp - 32) * 5 / 9
+        newdata.append((secs, temp_c))
+    profile["data"] = newdata
+    profile["temp_units"] = "c"
     return profile
 
 def convert_to_f(profile):
-    newdata=[]
-    for (secs,temp) in profile["data"]:
-        temp = ((9/5)*temp)+32
-        newdata.append((secs,temp))
-    profile["data"]=newdata
+    """Convert profile temperatures from Celsius to Fahrenheit"""
+    # Only convert if not already in Fahrenheit (idempotent)
+    if profile.get("temp_units") == "f":
+        return profile
+    
+    newdata = []
+    for (secs, temp) in profile["data"]:
+        temp_f = (temp * 9 / 5) + 32
+        newdata.append((secs, temp_f))
+    profile["data"] = newdata
+    profile["temp_units"] = "f"
     return profile
 
 def normalize_temp_units(profiles):
+    """
+    Convert profiles to display in config.temp_scale.
+    Creates deep copies - doesn't modify originals.
+    """
+    import copy
     normalized = []
+    
     for profile in profiles:
-        if "temp_units" in profile:
-            if config.temp_scale == "f" and profile["temp_units"] == "c": 
-                profile = convert_to_f(profile)
-                profile["temp_units"] = "f"
-        normalized.append(profile)
+        # Deep copy to avoid modifying the original
+        display_profile = copy.deepcopy(profile)
+        
+        # Ensure it has temp_units (defaults to F)
+        display_profile = add_temp_units(display_profile)
+        
+        # Convert to match config for display if needed
+        if config.temp_scale == "c" and display_profile["temp_units"] == "f":
+            display_profile = convert_to_c(display_profile)
+        elif config.temp_scale == "f" and display_profile["temp_units"] == "c":
+            display_profile = convert_to_f(display_profile)
+        
+        normalized.append(display_profile)
+    
     return normalized
 
 def delete_profile(profile):
@@ -338,7 +391,57 @@ def get_config():
         "time_scale_slope": config.time_scale_slope,
         "time_scale_profile": config.time_scale_profile,
         "kwh_rate": config.kwh_rate,
-        "currency_type": config.currency_type})    
+        "kw_elements": config.kw_elements,
+        "currency_type": config.currency_type})
+
+@app.get('/api/last_firing')
+def get_last_firing():
+    """Return summary of the last completed firing"""
+    log.info("/api/last_firing command received")
+    try:
+        if os.path.exists(config.last_firing_file):
+            with open(config.last_firing_file, 'r') as f:
+                last_firing = json.load(f)
+            return json.dumps(last_firing)
+        else:
+            return json.dumps({"error": "No firing history available"})
+    except Exception as e:
+        log.error(f"Error reading last firing: {e}")
+        return json.dumps({"error": "Failed to read firing history"})
+
+@app.get('/api/firing_logs')
+def get_firing_logs():
+    """Return list of all firing log files"""
+    log.info("/api/firing_logs command received")
+    try:
+        if not os.path.exists(config.firing_logs_directory):
+            return json.dumps([])
+        
+        log_files = []
+        for filename in sorted(os.listdir(config.firing_logs_directory), reverse=True):
+            if filename.endswith('.json'):
+                filepath = os.path.join(config.firing_logs_directory, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        log_data = json.load(f)
+                    # Return summary info only
+                    log_files.append({
+                        'filename': filename,
+                        'profile_name': log_data.get('profile_name'),
+                        'end_time': log_data.get('end_time'),
+                        'duration_seconds': log_data.get('duration_seconds'),
+                        'final_cost': log_data.get('final_cost'),
+                        'avg_divergence': log_data.get('avg_divergence'),
+                        'status': log_data.get('status')
+                    })
+                except Exception as e:
+                    log.error(f"Error reading log file {filename}: {e}")
+                    continue
+        
+        return json.dumps(log_files)
+    except Exception as e:
+        log.error(f"Error listing firing logs: {e}")
+        return json.dumps({"error": "Failed to list firing logs"})    
 
 def main():
     ip = "0.0.0.0"

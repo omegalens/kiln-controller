@@ -1,0 +1,875 @@
+/*
+ * Kiln Controller - Mobile Responsive Styles
+ * Optimized for mobile devices and narrow screens
+ */
+
+/* ============================================
+   TABLET AND MOBILE (< 1024px)
+   ============================================ */
+
+@media (max-width: 1023px) {
+    
+    /* --- Status Display Responsive Layout --- */
+    
+    /* Hide title row on mobile/tablet - values are self-explanatory with units */
+    .ds-title-panel {
+        display: none !important;
+    }
+    
+    .ds-panel {
+        display: flex;
+        flex-wrap: wrap;
+        padding-top: 5px;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .ds-num {
+        width: 33.33% !important;  /* 3 columns on tablets */
+        min-width: 110px;
+        box-sizing: border-box;
+        padding: 5px 3px;
+    }
+    
+    /* Adjust unit text sizing for better fit on mobile */
+    .ds-unit {
+        font-size: 18px !important;
+        line-height: 28px;
+        margin-left: 2px;
+    }
+    
+    /* Stack state section full width */
+    .ds-state {
+        width: 100% !important;
+        border-left: none !important;
+        border-top: 1px solid #ccc;
+        margin-top: 0;
+    }
+    
+    /* Ensure panel doesn't overlap */
+    .panel-default {
+        position: relative;
+        z-index: 10;
+    }
+    
+    /* Adjust LED indicators to fit proportionally */
+    .ds-led {
+        width: calc(20% - 1px) !important;  /* 5 LEDs fit in width */
+        font-size: 32px;
+        line-height: 50px;
+        height: 50px;
+        border-left: none;
+        border-right: 1px solid rgba(185, 182, 175, 0.3);  /* Subtler separators */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        flex-direction: column;
+        padding-bottom: 18px;
+    }
+    
+    .ds-led:last-child {
+        border-right: none;
+    }
+    
+    /* LED labels for mobile */
+    .ds-led::after {
+        content: attr(data-label);
+        position: absolute;
+        bottom: 2px;
+        left: 0;
+        right: 0;
+        font-size: 9px;
+        font-family: Arial, sans-serif;
+        text-align: center;
+        color: rgba(216, 211, 197, 0.6);
+        text-shadow: none;
+        line-height: 1;
+    }
+    
+    /* Active LED labels are brighter */
+    .ds-led-heat-active::after,
+    .ds-led-cool-active::after,
+    .ds-led-air-active::after,
+    .ds-led-hazard-active::after,
+    .ds-led-door-open::after {
+        color: rgba(255, 255, 255, 0.8);
+        font-weight: 600;
+    }
+    
+    /* Status panel height adjustment */
+    #status {
+        height: auto;
+        min-height: 95px;  /* Increased to accommodate LED labels */
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    
+    .ds-state {
+        min-height: 68px;  /* Extra height for LED labels */
+    }
+    
+    /* Tighten progress bar */
+    .progress {
+        margin-bottom: 0;
+        border-bottom-left-radius: 6px;
+        border-bottom-right-radius: 6px;
+    }
+    
+    .progress-bar {
+        transition: width 0.6s ease;
+        font-size: 15px;
+        line-height: 20px;
+    }
+    
+    /* --- Control Panel Responsive Layout --- */
+    
+    /* Keep profile selector and buttons inline */
+    #profile_selector {
+        float: none !important;
+        width: 100%;
+        margin-bottom: 4px;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        flex-wrap: nowrap;
+        gap: 5px;
+    }
+    
+    #btn_controls {
+        float: none !important;
+        width: 100%;
+        margin-bottom: 0;
+        margin-top: 8px;
+        text-align: center;
+    }
+    
+    .select2-container {
+        width: auto !important;
+        flex: 1;
+        max-width: calc(100% - 100px);  /* Leave room for buttons */
+        min-width: 150px;
+    }
+    
+    #profile_selector .btn {
+        flex-shrink: 0;
+        margin: 0 2px;
+        min-width: 44px;
+        transition: all 0.15s ease;
+    }
+    
+    /* Better touch feedback for all buttons */
+    .btn:active {
+        transform: scale(0.95);
+        box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.3);
+    }
+    
+    .btn {
+        transition: all 0.15s ease;
+    }
+    
+    /* Make buttons full width or stacked */
+    #btn_controls .btn-group {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+    }
+    
+    #btn_controls .btn-group .btn {
+        width: 100% !important;
+        margin: 0 0 5px 0;
+        min-height: 44px;
+    }
+    
+    #btn_controls .btn-group .btn:last-child {
+        margin-bottom: 0;
+    }
+    
+    /* Ensure standalone buttons are also full width */
+    #btn_controls > .btn {
+        width: 100% !important;
+        margin: 0;
+    }
+    
+    /* Enhanced Start button appearance */
+    #btn_controls .btn-success {
+        min-height: 54px;
+        font-size: 18px;
+        font-weight: 600;
+        box-shadow: 0 3px 10px rgba(117, 137, 12, 0.3);
+    }
+    
+    #btn_controls .btn-success:active {
+        box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.4);
+        transform: scale(0.97);
+    }
+    
+    /* Enhanced Stop button appearance */
+    #btn_controls .btn-danger {
+        min-height: 54px;
+        font-size: 18px;
+        font-weight: 600;
+        box-shadow: 0 3px 10px rgba(169, 68, 66, 0.3);
+    }
+    
+    #btn_controls .btn-danger:active {
+        box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.4);
+        transform: scale(0.97);
+    }
+    
+    /* Edit mode controls */
+    #edit {
+        width: 100%;
+    }
+    
+    #edit .input-group {
+        margin-bottom: 10px;
+    }
+    
+    #edit .btn-group {
+        margin: 5px 0;
+        display: flex;
+        justify-content: center;
+    }
+    
+    #edit .btn {
+        min-width: 44px;
+        min-height: 44px;
+        margin: 0 3px;
+    }
+    
+    /* --- Graph Responsive Adjustments --- */
+    
+    .graph {
+        height: 250px;
+        width: 100%;
+        margin-top: 0;
+    }
+    
+    /* Remove any extra spacing around graph container */
+    #graph_container {
+        margin: 0;
+        padding: 0;
+    }
+    
+    /* --- Panel Layout --- */
+    
+    .container {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
+    
+    /* Reduce excessive vertical spacing */
+    .panel-body {
+        padding: 12px;
+        padding-top: 8px;
+    }
+    
+    .panel-heading {
+        padding: 10px 12px;
+        padding-bottom: 8px;
+        overflow: visible;
+        min-height: auto;
+        display: block;
+    }
+    
+    /* When showing controls, add minimal padding */
+    .panel-heading:has(#btn_controls) {
+        padding-bottom: 8px;
+    }
+    
+    /* Ensure profile selector and controls stack properly */
+    .panel-heading #profile_selector,
+    .panel-heading #btn_controls {
+        clear: both;
+        display: block;
+        width: 100%;
+        margin-left: 0;
+        margin-right: 0;
+    }
+    
+    .panel-default {
+        margin-top: 10px;
+        margin-bottom: 10px;
+    }
+    
+    /* Tighten spacing in button groups */
+    #btn_controls .btn-group {
+        margin: 0;
+    }
+    
+    /* Clear floats properly to eliminate gaps */
+    .panel-heading::after {
+        content: "";
+        display: table;
+        clear: both;
+    }
+    
+    /* Reduce gap between heading and body */
+    .panel-heading + .panel-body {
+        margin-top: 0;
+    }
+    
+    /* Better panel shadows on mobile */
+    #status,
+    .panel-default {
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    }
+    
+    /* --- Touch-Friendly Interactions --- */
+    
+    .btn {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 10px 15px;
+        font-size: 16px;
+    }
+    
+    .form-control {
+        font-size: 16px;  /* Prevents iOS zoom */
+        min-height: 44px;
+        padding: 10px;
+    }
+    
+    .input-group-btn {
+        vertical-align: top;
+    }
+    
+    .input-group-btn .btn {
+        height: 44px;
+    }
+    
+    /* --- Modal Responsive Layout --- */
+    
+    .modal-dialog {
+        margin: 15px;
+    }
+    
+    .modal-body table {
+        font-size: 14px;
+    }
+    
+    .modal-body td {
+        padding: 8px;
+        word-wrap: break-word;
+    }
+}
+
+/* ============================================
+   SMALL TABLET AND PHONE (< 768px)
+   ============================================ */
+
+@media (max-width: 767px) {
+    /* Switch to 2 columns for smaller tablets/phones */
+    .ds-num {
+        width: 50% !important;
+        min-width: 130px;
+        padding: 8px 3px;
+    }
+    
+    /* Further reduce unit font size for small tablets/phones */
+    .ds-unit {
+        font-size: 16px !important;
+        line-height: 26px;
+    }
+    
+    /* Improve visual hierarchy - current temp is most important */
+    .ds-num:first-child {
+        font-size: 44px;
+    }
+    
+    /* Target temp slightly less prominent */
+    .ds-num:nth-child(2) {
+        opacity: 0.9;
+    }
+    
+    /* Ensure buttons stay inline on phones */
+    #profile_selector {
+        flex-wrap: nowrap !important;
+    }
+    
+    .select2-container {
+        max-width: calc(100% - 100px) !important;
+    }
+}
+
+/* ============================================
+   LANDSCAPE PHONE
+   ============================================ */
+
+@media (max-width: 767px) and (orientation: landscape) {
+    
+    /* Optimize for landscape mode */
+    #status {
+        margin-top: 5px;
+        min-height: 60px;
+    }
+    
+    .display {
+        font-size: 32px;
+        height: 32px;
+        line-height: 32px;
+    }
+    
+    .ds-unit {
+        font-size: 18px;
+        line-height: 28px;
+    }
+    
+    .ds-text {
+        font-size: 28px;
+    }
+    
+    .graph {
+        height: 180px;  /* Shorter graph in landscape */
+    }
+    
+    .panel-heading {
+        padding: 10px;
+    }
+}
+
+/* ============================================
+   SMALL PHONES (< 480px)
+   ============================================ */
+
+@media (max-width: 480px) {
+    
+    /* --- Status Display - Single Column --- */
+    
+    .ds-num {
+        width: 100% !important;  /* Single column */
+        text-align: center;
+        border-right: none !important;
+        border-bottom: 1px solid #b9b6af;
+    }
+    
+    .ds-num:nth-child(4) {
+        border-bottom: none;
+    }
+    
+    /* Scale down fonts */
+    .ds-num {
+        font-size: 32px;
+        padding: 8px 5px;
+        height: auto;
+        line-height: 32px;
+    }
+    
+    .ds-unit {
+        font-size: 16px !important;
+        line-height: 26px;
+    }
+    
+    .ds-text {
+        font-size: 28px;
+        padding: 5px;
+    }
+    
+    /* LED indicators remain 5 across */
+    .ds-led {
+        width: calc(20% - 1px) !important;
+        font-size: 26px;
+        height: 50px;
+        line-height: 32px;
+        border-right: 1px solid rgba(185, 182, 175, 0.3);
+        padding-top: 4px;
+    }
+    
+    .ds-led::after {
+        font-size: 8px;
+        bottom: 3px;
+    }
+    
+    /* --- Graph --- */
+    
+    .graph {
+        height: 200px;
+    }
+    
+    /* --- Controls --- */
+    
+    /* Stack profile controls for better usability on small screens */
+    #profile_selector {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px;
+        padding: 8px;
+        align-items: stretch;
+    }
+    
+    /* Select takes full width on first row */
+    #profile_selector .select2-container {
+        width: 100% !important;
+        max-width: 100% !important;
+        flex: 1 1 100%;
+        order: -1;
+    }
+    
+    #profile_selector .select2 {
+        width: 100% !important;
+    }
+    
+    /* Buttons share second row equally */
+    #profile_selector #btn_edit,
+    #profile_selector #btn_new {
+        flex: 1 1 calc(50% - 4px);
+        min-width: 48px;
+        min-height: 48px;
+        padding: 12px;
+        font-size: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 !important;
+    }
+    
+    #btn_controls .btn {
+        font-size: 14px;
+        padding: 12px 10px;
+    }
+    
+    /* --- Edit Mode --- */
+    
+    #edit .btn-group {
+        flex-wrap: wrap;
+    }
+    
+    #edit .btn-group .btn {
+        margin: 3px;
+        flex: 1 1 auto;
+        min-width: 40px;
+    }
+    
+    /* --- Panel Spacing --- */
+    
+    .container {
+        padding-left: 5px;
+        padding-right: 5px;
+    }
+    
+    .panel-default {
+        margin-top: 10px;
+    }
+    
+    /* --- Modal Full Screen on Small Devices --- */
+    
+    .modal-dialog {
+        margin: 10px;
+        width: calc(100% - 20px);
+    }
+    
+    .modal.fade.in {
+        top: 5% !important;
+    }
+    
+    /* Stack modal buttons vertically */
+    .modal-footer .btn-group {
+        flex-direction: column;
+    }
+    
+    .modal-footer .btn {
+        width: 100% !important;
+        margin: 5px 0;
+        font-size: 14px;
+    }
+    
+    /* Improve modal table readability */
+    .modal-body table td {
+        display: block;
+        width: 100% !important;
+        text-align: left;
+        padding: 5px 10px;
+        border: none;
+    }
+    
+    .modal-body table tr {
+        display: block;
+        margin-bottom: 10px;
+        border-bottom: 1px solid #ddd;
+    }
+    
+    .modal-body table td:first-child {
+        font-weight: bold;
+        background: rgba(0, 0, 0, 0.05);
+    }
+    
+    /* --- Progress Bar --- */
+    
+    .progress-bar {
+        font-size: 14px;
+    }
+}
+
+/* ============================================
+   VERY SMALL PHONES (< 360px)
+   ============================================ */
+
+@media (max-width: 360px) {
+    
+    .ds-num {
+        font-size: 28px;
+        padding: 6px 3px;
+    }
+    
+    .ds-unit {
+        font-size: 14px !important;
+        line-height: 24px;
+    }
+    
+    .ds-text {
+        font-size: 24px;
+    }
+    
+    .ds-led {
+        font-size: 22px;
+        height: 48px;
+        line-height: 28px;
+        border-right: 1px solid rgba(185, 182, 175, 0.3);
+        padding-top: 4px;
+    }
+    
+    .ds-led::after {
+        font-size: 7px;
+        bottom: 2px;
+    }
+    
+    .graph {
+        height: 180px;
+    }
+    
+    .btn {
+        font-size: 14px;
+        padding: 10px 8px;
+    }
+    
+    #edit .btn {
+        min-width: 38px;
+        padding: 8px;
+    }
+    
+    /* Tighter panel spacing on very small screens */
+    .panel-heading {
+        padding: 8px;
+        padding-bottom: 6px;
+        min-height: auto;
+    }
+    
+    .panel-body {
+        padding-top: 6px;
+    }
+    
+    #status {
+        min-height: 90px;
+    }
+}
+
+/* ============================================
+   LOADING STATES AND ANIMATIONS
+   ============================================ */
+
+@media (max-width: 1023px) {
+    
+    /* Loading animation for temperature values */
+    .ds-num.loading {
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 1; }
+    }
+    
+    /* Placeholder styling for inactive values */
+    .ds-num .placeholder,
+    .ds-num:empty::before {
+        opacity: 0.3;
+    }
+    
+    /* Better visual for disconnected state */
+    .ds-num.no-data {
+        opacity: 0.4;
+        font-size: 0.8em;
+    }
+    
+    /* Smooth transitions for value changes */
+    .ds-num,
+    .ds-text {
+        transition: opacity 0.3s ease, color 0.3s ease, transform 0.2s ease;
+    }
+    
+    /* Subtle highlight when values update */
+    .ds-num.updated {
+        animation: highlight 0.5s ease;
+    }
+    
+    @keyframes highlight {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); opacity: 1; }
+        100% { transform: scale(1); }
+    }
+    
+    /* Better styling for placeholder dashes */
+    .ds-num:contains("---") {
+        opacity: 0.4;
+    }
+}
+
+/* ============================================
+   GENERAL MOBILE IMPROVEMENTS
+   ============================================ */
+
+@media (max-width: 1023px) {
+    
+    /* Prevent horizontal scrolling */
+    body {
+        overflow-x: hidden;
+    }
+    
+    .container {
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+    
+    /* Better tap highlighting */
+    * {
+        -webkit-tap-highlight-color: rgba(117, 137, 12, 0.2);
+    }
+    
+    .btn:active,
+    .btn:focus {
+        opacity: 0.8;
+        outline: none;
+    }
+    
+    /* Improve select2 dropdown on mobile */
+    .select2-drop {
+        max-width: 100vw;
+    }
+    
+    .select2-results {
+        max-height: 200px;
+        font-size: 16px;
+    }
+    
+    /* Better table overflow handling */
+    .table-responsive {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    /* Profile table responsiveness */
+    #profile_table {
+        font-size: 14px;
+        overflow-x: auto;
+    }
+    
+    #profile_table table {
+        min-width: 100%;
+    }
+    
+    /* Improve alert readability */
+    .alert {
+        font-size: 14px;
+        padding: 10px;
+        margin: 10px 5px;
+    }
+    
+    /* Better modal scrolling */
+    .modal-body {
+        max-height: 60vh;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* ============================================
+   ACCESSIBILITY IMPROVEMENTS
+   ============================================ */
+
+@media (max-width: 1023px) {
+    
+    /* Larger focus indicators for keyboard navigation */
+    button:focus,
+    input:focus,
+    select:focus {
+        outline: 2px solid #75890c;
+        outline-offset: 2px;
+    }
+    
+    /* Ensure text contrast */
+    .btn-default {
+        color: #333;
+    }
+    
+    /* Better spacing for readability */
+    p, li {
+        line-height: 1.5;
+    }
+}
+
+/* ============================================
+   PERFORMANCE OPTIMIZATIONS
+   ============================================ */
+
+@media (max-width: 1023px) {
+    
+    /* Smoother animations on mobile */
+    .progress-bar,
+    .btn,
+    .modal {
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+        will-change: transform;
+    }
+    
+    /* Optimize graph rendering */
+    .graph {
+        -webkit-transform: translateZ(0);
+        transform: translateZ(0);
+    }
+    
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+}
+
+/* ============================================
+   DESKTOP COMPATIBILITY
+   ============================================ */
+
+/* Ensure mobile styles don't leak to desktop */
+@media (min-width: 1024px) {
+    
+    /* Hide LED labels on desktop */
+    .ds-led::after {
+        display: none !important;
+    }
+    
+    /* Reset LED sizing for desktop */
+    .ds-led {
+        padding-bottom: 0;
+        flex-direction: row;
+    }
+    
+    /* Keep original desktop button behavior */
+    .btn:active {
+        transform: none;
+    }
+    
+    /* Desktop profile selector stays horizontal */
+    #profile_selector {
+        flex-wrap: nowrap !important;
+    }
+}
+

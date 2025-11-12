@@ -3,7 +3,7 @@
 <head>
 
  <title>Kiln Controller</title>
- <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
  <script src="assets/js/jquery-1.10.2.min.js"></script>
  <script src="assets/js/jquery.event.drag-2.2.js"></script>
@@ -20,6 +20,7 @@
  <link rel="stylesheet" href="assets/css/bootstrap-modal.css"/>
  <link rel="stylesheet" href="assets/css/select2.css"/>
  <link rel="stylesheet" href="assets/css/picoreflow.css"/>
+ <link rel="stylesheet" href="assets/css/picoreflow-mobile.css"/>
 
 </head>
 <body>
@@ -39,8 +40,8 @@
     <div class="display ds-num ds-target"><span id="target_temp">---</span><span class="ds-unit" id="target_temp_scale">&deg;C</span></div>
     <div class="display ds-num ds-heat-rate"><span id="heat_rate">---</span><span class="ds-unit" id="heat_rate_temp_scale">&deg;C</span></div>
     <div class="display ds-num ds-cost"><span id="cost">0.00</span><span class="ds-unit" id="cost"></span></div>
-    <div class="display ds-num ds-text" id="state"></div>
-    <div class="display pull-right ds-state" style="padding-right:0"><span class="ds-led" id="heat">&#92;</span><span class="ds-led" id="cool">&#108;</span><span class="ds-led" id="air">&#91;</span><span class="ds-led" id="hazard">&#73;</span><span class="ds-led" id="door">&#9832;</span></div>
+    <div class="display ds-num ds-text" id="state"><span id="cooling_estimate" style="display:none; margin-left: 10px; font-size: 0.8em;"></span></div>
+    <div class="display pull-right ds-state" style="padding-right:0"><span class="ds-led" id="heat" data-label="Heat">&#92;</span><span class="ds-led" id="cool" data-label="Cool">&#108;</span><span class="ds-led" id="air" data-label="Air">&#91;</span><span class="ds-led" id="hazard" data-label="Alert">&#73;</span><span class="ds-led" id="door" data-label="Door">&#9832;</span></div>
    </div>
    <div class="clearfix"></div>
    <div>
@@ -49,9 +50,9 @@
       <span class="sr-only"></span>
      </div>
     </div>
-   </div>
   </div>
-  <div class="panel panel-default">
+ </div>
+ <div class="panel panel-default">
    <div class="panel-heading">
     <div id="profile_selector" class="pull-left">
      <select id="e2" class="select2" style="margin-top: 4px"></select>
@@ -91,6 +92,21 @@
     <div id="graph_container" class="graph"></div>
    </div>
    <div id="profile_table" class="panel-footer" style="display:none;"></div>
+  </div>
+  <div id="last_firing_panel" class="panel panel-default" style="display:none;">
+   <div class="panel-heading">
+    <h4 class="panel-title">Last Firing Results</h4>
+   </div>
+   <div class="panel-body">
+    <table class="table table-condensed">
+     <tr><td><strong>Profile:</strong></td><td><span id="last_firing_profile">-</span></td></tr>
+     <tr><td><strong>Status:</strong></td><td><span id="last_firing_status">-</span></td></tr>
+     <tr><td><strong>Duration:</strong></td><td><span id="last_firing_duration">-</span></td></tr>
+     <tr><td><strong>Final Cost:</strong></td><td><span id="last_firing_cost">-</span></td></tr>
+     <tr><td><strong>Avg Divergence:</strong></td><td><span id="last_firing_divergence">-</span></td></tr>
+     <tr><td><strong>Completed:</strong></td><td><span id="last_firing_timestamp">-</span></td></tr>
+    </table>
+   </div>
   </div>
  </div>
 

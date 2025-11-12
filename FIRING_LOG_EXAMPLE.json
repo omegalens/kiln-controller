@@ -1,0 +1,70 @@
+{
+  "profile_name": "cone-6-long-glaze",
+  "start_time": "2025-11-12T14:30:25.123456",
+  "end_time": "2025-11-12T22:15:30.654321",
+  "duration_seconds": 27905,
+  "final_cost": 12.48,
+  "final_temperature": 2232.5,
+  "avg_divergence": 3.45,
+  "currency_type": "$",
+  "temp_scale": "f",
+  "status": "completed",
+  "temperature_log": [
+    {
+      "runtime": 0.0,
+      "temperature": 72.0,
+      "target": 72.0
+    },
+    {
+      "runtime": 120.0,
+      "temperature": 150.5,
+      "target": 155.0
+    },
+    {
+      "runtime": 240.0,
+      "temperature": 235.2,
+      "target": 238.0
+    },
+    {
+      "runtime": 360.0,
+      "temperature": 318.8,
+      "target": 321.0
+    },
+    {
+      "runtime": 480.0,
+      "temperature": 402.1,
+      "target": 404.0
+    },
+    {
+      "runtime": 600.0,
+      "temperature": 485.6,
+      "target": 487.0
+    },
+    {
+      "runtime": 1200.0,
+      "temperature": 970.3,
+      "target": 974.0
+    },
+    {
+      "runtime": 1800.0,
+      "temperature": 1455.7,
+      "target": 1461.0
+    },
+    {
+      "runtime": 2400.0,
+      "temperature": 1938.2,
+      "target": 1948.0
+    },
+    {
+      "runtime": 3000.0,
+      "temperature": 2230.5,
+      "target": 2232.0
+    },
+    {
+      "runtime": 3600.0,
+      "temperature": 2232.1,
+      "target": 2232.0
+    }
+  ]
+}
+
