@@ -24,6 +24,14 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
   * support for a watcher to page you via slack if you kiln is out of whack
   * easy scheduling of future kiln runs
 
+## Major Changes from jbruce's original repository
+
+  * **Mobile-responsive interface** - Full mobile optimization with 5 responsive breakpoints, touch-friendly controls (44px+ touch targets), LED indicator labels, touch feedback animations, and loading states
+  * **Firing logs with divergence tracking** - Automatic logging of all firings with temperature divergence metrics to track kiln performance over time
+  * **Cooldown time calculation** - Based on Newtons law of cooling, gives an estimate for time to 100F given recent cooling rate. Assumes 65F outside temperature. Adjustable in config.py
+  * **Fixed cost calculation bugs** - Corrected 50% underreporting in cost tracking and improved cost estimation accuracy
+  * **Critical bug fixes** - Fixed 8 critical/high-priority bugs including schedule completion crashes, temperature conversion errors, PID integral windup, and file locking issues
+
 
 **Run Kiln Schedule**
 
