@@ -21,10 +21,23 @@ if (window.location.protocol == 'https:') {
     protocol = 'wss:';
 }
 var host = "" + protocol + "//" + window.location.hostname + ":" + window.location.port;
+
+// #region agent log
+console.log("[DEBUG-A] protocol=" + protocol + " hostname=" + window.location.hostname + " port=" + window.location.port + " host=" + host);
+// #endregion
+
 var ws_status = new WebSocket(host+"/status");
 var ws_control = new WebSocket(host+"/control");
 var ws_config = new WebSocket(host+"/config");
 var ws_storage = new WebSocket(host+"/storage");
+
+// #region agent log
+console.log("[DEBUG-D] WebSockets created: status=" + ws_status.url + " control=" + ws_control.url);
+ws_status.onerror = function(e) { console.error("[DEBUG-E] ws_status ERROR readyState=" + ws_status.readyState); };
+ws_control.onerror = function(e) { console.error("[DEBUG-E] ws_control ERROR readyState=" + ws_control.readyState); };
+ws_config.onerror = function(e) { console.error("[DEBUG-E] ws_config ERROR readyState=" + ws_config.readyState); };
+ws_storage.onerror = function(e) { console.error("[DEBUG-E] ws_storage ERROR readyState=" + ws_storage.readyState); };
+// #endregion
 
 
 if(window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;

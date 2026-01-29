@@ -151,7 +151,13 @@ def find_profile(wanted):
 @app.route('/picoreflow/:filename#.*#')
 def send_static(filename):
     log.debug("serving %s" % filename)
-    return bottle.static_file(filename, root=os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "public"))
+    response = bottle.static_file(filename, root=os.path.join(os.path.dirname(os.path.realpath(sys.argv[0])), "public"))
+    # Prevent caching of JS files to ensure fresh loads during development
+    if filename.endswith('.js'):
+        response.set_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        response.set_header('Pragma', 'no-cache')
+        response.set_header('Expires', '0')
+    return response
 
 
 def get_websocket_from_request():

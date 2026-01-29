@@ -2,6 +2,7 @@
 Description=kiln-controller
 
 [Service]
+User=user
 ExecStart=/home/user/kiln-controller/venv/bin/python /home/user/kiln-controller/kiln-controller.py
 
 [Install]
