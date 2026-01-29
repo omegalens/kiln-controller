@@ -5,7 +5,7 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 
 ## Features
 
-  * supports [many boards](https://github.com/jbruce12000/kiln-controller/blob/main/docs/supported-boards.md) into addition to raspberry pi
+  * supports [many boards](https://github.com/omegalens/kiln-controller/blob/main/docs/supported-boards.md) into addition to raspberry pi
   * supports Adafruit MAX31856 and MAX31855 thermocouple boards
   * support for K, J, N, R, S, T, E, or B type thermocouples
   * easy to create new kiln schedules and edit / modify existing schedules
@@ -76,7 +76,7 @@ Download [Raspberry PI OS](https://www.raspberrypi.org/software/). Use Rasberry 
 
     $ sudo apt-get update
     $ sudo apt-get dist-upgrade
-    $ git clone https://github.com/jbruce12000/kiln-controller
+    $ git clone https://github.com/omegalens/kiln-controller
     $ cd kiln-controller
     $ python3 -m venv venv
     $ source venv/bin/activate
@@ -124,7 +124,7 @@ and you can use this script to examine each pin's state including input/output/v
 
 ## PID Tuning
 
-Run the [autotuner](https://github.com/jbruce12000/kiln-controller/blob/main/docs/ziegler_tuning.md). It will heat your kiln to 400F, pass that, and then once it cools back down to 400F, it will calculate PID values which you must copy into config.py. No tuning is perfect across a wide temperature range. Here is a [PID Tuning Guide](https://github.com/jbruce12000/kiln-controller/blob/main/docs/pid_tuning.md) if you end up having to manually tune.
+Run the [autotuner](https://github.com/omegalens/kiln-controller/blob/main/docs/ziegler_tuning.md). It will heat your kiln to 400F, pass that, and then once it cools back down to 400F, it will calculate PID values which you must copy into config.py. No tuning is perfect across a wide temperature range. Here is a [PID Tuning Guide](https://github.com/omegalens/kiln-controller/blob/main/docs/pid_tuning.md) if you end up having to manually tune.
 
 There is a state view that can help with tuning. It shows the P,I, and D parameters over time plus allows for a csv dump of data collected. It also shows lots of other details that might help with troubleshooting issues. Go to /state.
 
