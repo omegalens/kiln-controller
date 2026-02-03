@@ -1,0 +1,1 @@
+{"type": "profile", "version": 2, "name": "testy", "start_temp": 65, "temp_units": "f", "segments": [{"rate": 20, "target": 165, "hold": 0}, {"rate": 100, "target": 265, "hold": 5}, {"rate": 100, "target": 365, "hold": 0}]}

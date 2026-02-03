@@ -1,0 +1,10 @@
+# Development requirements for macOS/local testing
+# Excludes Raspberry Pi-specific hardware packages
+
+setuptools
+greenlet
+bottle
+gevent
+gevent-websocket
+websocket-client
+requests
