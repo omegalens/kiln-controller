@@ -1,1 +1,1 @@
-{"data": [[0, 100], [480, 200], [2000, 200], [2300, 250], [3600, 250]], "type": "profile", "name": "test-200-250"}
+{"type": "profile", "version": 2, "name": "test-200-250", "start_temp": 100, "temp_units": "f", "segments": [{"rate": 750, "target": 200, "hold": 25.333333333333332}, {"rate": 600, "target": 250, "hold": 21.666666666666668}]}

@@ -337,11 +337,23 @@ def convert_to_c(profile):
     if profile.get("temp_units") == "c":
         return profile
     
-    newdata = []
-    for (secs, temp) in profile["data"]:
-        temp_c = (temp - 32) * 5 / 9
-        newdata.append((secs, temp_c))
-    profile["data"] = newdata
+    # Handle v2 format (segments)
+    if profile.get("version", 1) >= 2 and "segments" in profile:
+        if "start_temp" in profile:
+            profile["start_temp"] = (profile["start_temp"] - 32) * 5 / 9
+        for segment in profile.get("segments", []):
+            segment["target"] = (segment["target"] - 32) * 5 / 9
+            # Convert rate (degrees/hour)
+            if isinstance(segment["rate"], (int, float)):
+                segment["rate"] = segment["rate"] * 5 / 9
+    else:
+        # Handle v1 format (data points)
+        newdata = []
+        for (secs, temp) in profile.get("data", []):
+            temp_c = (temp - 32) * 5 / 9
+            newdata.append((secs, temp_c))
+        profile["data"] = newdata
+    
     profile["temp_units"] = "c"
     return profile
 
@@ -351,11 +363,23 @@ def convert_to_f(profile):
     if profile.get("temp_units") == "f":
         return profile
     
-    newdata = []
-    for (secs, temp) in profile["data"]:
-        temp_f = (temp * 9 / 5) + 32
-        newdata.append((secs, temp_f))
-    profile["data"] = newdata
+    # Handle v2 format (segments)
+    if profile.get("version", 1) >= 2 and "segments" in profile:
+        if "start_temp" in profile:
+            profile["start_temp"] = (profile["start_temp"] * 9 / 5) + 32
+        for segment in profile.get("segments", []):
+            segment["target"] = (segment["target"] * 9 / 5) + 32
+            # Convert rate (degrees/hour)
+            if isinstance(segment["rate"], (int, float)):
+                segment["rate"] = segment["rate"] * 9 / 5
+    else:
+        # Handle v1 format (data points)
+        newdata = []
+        for (secs, temp) in profile.get("data", []):
+            temp_f = (temp * 9 / 5) + 32
+            newdata.append((secs, temp_f))
+        profile["data"] = newdata
+    
     profile["temp_units"] = "f"
     return profile
 

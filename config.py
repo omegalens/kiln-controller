@@ -1,7 +1,14 @@
 import logging
 import os
-from digitalio import DigitalInOut
-import busio
+
+# Hardware imports - wrapped for simulation mode on non-Pi systems
+try:
+    from digitalio import DigitalInOut
+    import busio
+except (ImportError, NotImplementedError):
+    DigitalInOut = None
+    busio = None
+    print("Hardware modules not available - running in simulation mode")
 
 ########################################################################
 #
@@ -90,8 +97,16 @@ try:
     spi_mosi  = board.D10    #spi Microcomputer Out Serial In (not connected) 
     gpio_heat = board.D23    #output that controls relay
     gpio_heat_invert = False #invert the output state
-except (NotImplementedError,AttributeError):
+except (ImportError, NotImplementedError, AttributeError):
     print("not running on blinka recognized board, probably a simulation")
+    # Set to None for simulation mode
+    board = None
+    spi_sclk = None
+    spi_miso = None
+    spi_cs = None
+    spi_mosi = None
+    gpio_heat = None
+    gpio_heat_invert = False
 
 #######################################
 ### Thermocouple breakout boards
@@ -102,8 +117,12 @@ except (NotImplementedError,AttributeError):
 max31855 = 1
 max31856 = 0
 # uncomment these two lines if using MAX-31856
-import adafruit_max31856
-thermocouple_type = adafruit_max31856.ThermocoupleType.K
+try:
+    import adafruit_max31856
+    thermocouple_type = adafruit_max31856.ThermocoupleType.K
+except ImportError:
+    adafruit_max31856 = None
+    thermocouple_type = None
 
 # here are the possible max-31856 thermocouple types
 #   ThermocoupleType.B
@@ -157,8 +176,8 @@ stop_integral_windup = True
 #   Simulation parameters
 simulate = True
 sim_t_env      = 65   # deg
-sim_c_heat     = 500.0  # J/K  heat capacity of heat element
-sim_c_oven     = 5000.0 # J/K  heat capacity of oven
+sim_c_heat     = 50.0  # J/K  heat capacity of heat element
+sim_c_oven     = 500.0 # J/K  heat capacity of oven
 sim_p_heat     = 5450.0 # W    heating power of oven
 sim_R_o_nocool = 0.5   # K/W  thermal resistance oven -> environment
 sim_R_o_cool   = 0.05   # K/W  " with cooling
@@ -199,7 +218,7 @@ kiln_must_catch_up = True
 # or 100% off because the kiln is too hot. No integral builds up
 # outside the window. The bigger you make the window, the more
 # integral you will accumulate. This should be a positive integer.
-pid_control_window = 5 #degrees
+pid_control_window = 50 #degrees
 
 # thermocouple offset
 # If you put your thermocouple in ice water and it reads 36F, you can
@@ -290,3 +309,73 @@ throttle_percent = 20
 cooling_ambient_temp = 65  # Fahrenheit - assumed room temperature outside kiln
 cooling_target_temp = 100  # Fahrenheit - temperature considered safe to open kiln
 cooling_min_samples = 15   # Minimum temperature samples before calculating estimate
+
+########################################################################
+# Rate-Based Profile Control Settings (v2 profile format)
+#
+# These settings control the new rate-based profile format where heat
+# rates are the primary control mechanism rather than time-based targets.
+########################################################################
+
+# Tolerance for considering a segment target "reached" (in degrees)
+# When the kiln is within this many degrees of the target, the segment
+# transitions from 'ramp' phase to 'hold' phase
+segment_complete_tolerance = 5
+
+# Maximum allowed deviation from target rate before logging warning (degrees/hour)
+# If the actual heating rate differs from the target rate by more than this,
+# a warning will be logged. This replaces the kiln_must_catch_up behavior
+# with logging-based feedback.
+rate_deviation_warning = 50
+
+# For "max" rate segments, what rate to use for time estimation (degrees/hour)
+# This is used to estimate ETA and duration when segments use "max" rate
+estimated_max_heating_rate = 500
+
+# For "cool" rate segments, what rate to use for time estimation (degrees/hour)
+# This is used to estimate ETA and duration when segments use "cool" rate
+estimated_natural_cooling_rate = 100
+
+# Whether to allow legacy v1 profile format (auto-convert on load)
+# Set to False to require all profiles to use v2 format
+allow_legacy_profiles = True
+
+# Feature flag for rate-based control (gradual rollout)
+# When True, uses the new segment-based control logic
+# When False, uses the legacy time-based control logic
+use_rate_based_control = True
+
+# Rate-based control: How far ahead (in seconds) the target should lead actual temp
+# Target = actual_temp + (rate * lookahead_seconds / 3600)
+# Higher values = more aggressive, lower = more conservative tracking
+# Default 60 seconds gives 1 minute of lead at the desired rate
+rate_lookahead_seconds = 60
+
+# Maximum temperature divergence between target and actual (degrees)
+# This caps the lead to prevent runaway with extreme rates
+# Even if the profile requests 10000°/hr, target will only lead actual by this amount
+# Default 50 degrees keeps target within achievable range
+max_target_divergence = 10
+
+########################################################################
+# Safety Configuration
+########################################################################
+
+# Stall Detection
+# If the heater is running at >95% capacity for this many seconds
+# and the temperature has not risen by at least stall_min_temp_rise,
+# the firing will be aborted to prevent damage/waste.
+stall_detect_time = 1800  # 30 minutes
+stall_min_temp_rise = 2   # degrees
+
+# Runaway/Stuck Relay Detection
+# If the heater is commanded to be OFF (<5% capacity) for this many seconds
+# and the temperature rises by more than runaway_min_temp_rise,
+# the system will trigger an emergency stop.
+runaway_detect_time = 300  # 5 minutes
+runaway_min_temp_rise = 10 # degrees
+
+# Disk Protection
+# Minimum seconds between saving state.json to disk
+# (Prevents SD card wear from constant writing)
+state_save_interval = 60 # seconds

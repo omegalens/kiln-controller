@@ -28,18 +28,22 @@
  <div class="container">
   <div id="status">
    <div class="ds-title-panel">
-    <div class="ds-title">Sensor Temp</div>
-    <div class="ds-title">Target Temp</div>
-    <div class="ds-title">Heat Rate</div>
+    <div class="ds-title">Sensor</div>
+    <div class="ds-title">Target</div>
+    <div class="ds-title">Actual Rate</div>
+    <div class="ds-title ds-title-setrate">Set Rate</div>
+    <div class="ds-title ds-title-elapsed">Elapsed</div>
     <div class="ds-title">Cost</div>
     <div class="ds-title ds-state pull-right" style="border-left: 1px solid #ccc;">Status</div>
    </div>
    <div class="clearfix"></div>
    <div class="ds-panel">
-    <div class="display ds-num"><span id="act_temp">25</span><span class="ds-unit" id="act_temp_scale" >&deg;C</span></div>
+    <div class="display ds-num"><span id="act_temp">---</span><span class="ds-unit" id="act_temp_scale">&deg;C</span></div>
     <div class="display ds-num ds-target"><span id="target_temp">---</span><span class="ds-unit" id="target_temp_scale">&deg;C</span></div>
-    <div class="display ds-num ds-heat-rate"><span id="heat_rate">---</span><span class="ds-unit" id="heat_rate_temp_scale">&deg;C</span></div>
-    <div class="display ds-num ds-cost"><span id="cost">0.00</span><span class="ds-unit" id="cost"></span></div>
+    <div class="display ds-num ds-heat-rate"><span id="heat_rate_actual">---</span><span class="ds-unit" id="heat_rate_temp_scale">&deg;C/hr</span></div>
+    <div class="display ds-num ds-heat-rate ds-setrate"><span id="heat_rate_set">---</span><span class="ds-unit">/hr</span></div>
+    <div class="display ds-num ds-elapsed"><span id="elapsed_time">--:--:--</span></div>
+    <div class="display ds-num ds-cost"><span id="cost">0.00</span></div>
     <div class="display ds-num ds-text" id="state"><span id="cooling_estimate" style="display:none; margin-left: 10px; font-size: 0.8em;"></span></div>
     <div class="display pull-right ds-state" style="padding-right:0"><span class="ds-led" id="heat" data-label="Heat">&#92;</span><span class="ds-led" id="cool" data-label="Cool">&#108;</span><span class="ds-led" id="air" data-label="Air">&#91;</span><span class="ds-led" id="hazard" data-label="Alert">&#73;</span><span class="ds-led" id="door" data-label="Door">&#9832;</span></div>
    </div>

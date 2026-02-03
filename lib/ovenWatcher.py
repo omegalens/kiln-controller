@@ -48,7 +48,18 @@ class OvenWatcher(threading.Thread):
         self.started = datetime.datetime.now()
         self.recording = True
         #we just turned on, add first state for nice graph
-        self.last_log.append(self.oven.get_state())
+        first_state = self.oven.get_state()
+        self.last_log.append(first_state)
+        
+        # Regenerate profile graph data starting from the kiln's actual temperature
+        # This ensures the profile line and live line both start at the same Y position
+        actual_temp = first_state.get('temperature', profile.start_temp)
+        if hasattr(profile, 'segments') and profile.segments:
+            # V2 profile: regenerate legacy data with actual kiln temperature
+            profile.data = profile.to_legacy_format(start_temp=actual_temp)
+        elif profile.data and len(profile.data) > 0:
+            # V1 profile: adjust the first point to match actual temperature
+            profile.data[0] = [0, actual_temp]
 
     def add_observer(self,observer):
         if self.last_profile:
