@@ -1,0 +1,423 @@
+/*
+ * Kiln Controller Dashboard - Responsive Styles
+ * Widgets reflow at breakpoints, don't scale internally
+ */
+
+/* ============================================
+   LARGE TABLETS / SMALL DESKTOPS (< 1200px)
+   ============================================ */
+
+@media (max-width: 1199px) {
+  
+  /* Two column layout: profiles on left, graph on right */
+  /* Insights widget spans full width below */
+  
+  .widget-profiles {
+    grid-row: 1;
+  }
+  
+  .widget-graph {
+    grid-row: 1;
+  }
+  
+  .widget-insights {
+    grid-row: 2;
+  }
+  
+  /* Insights widget becomes horizontal layout */
+  .widget-insights .widget-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-lg);
+  }
+  
+  .metrics-grid {
+    flex: 1;
+    min-width: 300px;
+    grid-template-columns: repeat(3, 1fr);
+    margin-bottom: 0;
+  }
+  
+  .controls {
+    flex-direction: column;
+    padding: 0;
+  }
+  
+  .confirm-panel {
+    flex: 1;
+    min-width: 250px;
+  }
+}
+
+/* ============================================
+   TABLETS (< 900px)
+   ============================================ */
+
+@media (max-width: 899px) {
+  
+  /* Single column layout - all widgets stack */
+  
+  .status-header {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--spacing-md);
+  }
+  
+  .status-leds {
+    order: 2;
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .status-state {
+    order: 1;
+  }
+  
+  /* Profiles widget horizontal scrolling list */
+  .widget-profiles .widget-content {
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: var(--spacing-sm);
+  }
+  
+  .profile-list {
+    display: flex;
+    gap: var(--spacing-sm);
+    padding-bottom: var(--spacing-xs);
+  }
+  
+  .profile-item {
+    flex-shrink: 0;
+    width: 160px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-sm);
+  }
+  
+  .profile-bar-container {
+    width: 100%;
+  }
+  
+  .profile-actions {
+    justify-content: center;
+  }
+  
+  /* Graph area sizing */
+  #graph_container {
+    height: 240px;
+  }
+  
+  /* Metrics back to 2 columns */
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+    min-width: auto;
+  }
+  
+  /* Controls horizontal on tablet */
+  .controls {
+    flex-direction: row;
+    justify-content: center;
+  }
+  
+  /* Last firing horizontal layout */
+  .last-firing-grid {
+    grid-template-columns: repeat(3, auto 1fr);
+    gap: var(--spacing-sm) var(--spacing-lg);
+  }
+}
+
+/* ============================================
+   SMALL TABLETS / LARGE PHONES (< 600px)
+   ============================================ */
+
+@media (max-width: 599px) {
+  
+  body.kiln-dashboard {
+    padding: var(--spacing-sm);
+  }
+  
+  /* Header more compact */
+  .status-header {
+    padding: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+  }
+  
+  .led {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+  
+  .led::after {
+    font-size: 8px;
+    bottom: -16px;
+  }
+  
+  /* Widget titles smaller */
+  .widget-title {
+    font-size: var(--text-xs);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+  
+  /* Profiles list items smaller */
+  .profile-item {
+    width: 140px;
+    padding: var(--spacing-sm);
+  }
+  
+  .profile-name {
+    font-size: var(--text-xs);
+  }
+  
+  /* Graph stats stacked */
+  .graph-stats {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-sm);
+  }
+  
+  .graph-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    text-align: left;
+  }
+  
+  .graph-stat-label {
+    margin-bottom: 0;
+  }
+  
+  /* Metrics single column on small screens */
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .metric-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+  }
+  
+  .metric-label {
+    margin-bottom: 0;
+    flex: 1;
+  }
+  
+  .metric-value {
+    font-size: var(--text-2xl);
+    margin-bottom: 0;
+    margin-right: var(--spacing-xs);
+  }
+  
+  /* Control buttons smaller */
+  .btn-control {
+    width: 70px;
+    height: 70px;
+    font-size: var(--text-xs);
+  }
+  
+  /* Last firing single column */
+  .last-firing-grid {
+    grid-template-columns: auto 1fr;
+  }
+  
+  /* Confirm panel full width actions */
+  .confirm-actions {
+    flex-direction: column;
+  }
+}
+
+/* ============================================
+   PHONES (< 480px)
+   ============================================ */
+
+@media (max-width: 479px) {
+  
+  body.kiln-dashboard {
+    padding: var(--spacing-xs);
+  }
+  
+  .dashboard-grid {
+    gap: var(--spacing-sm);
+  }
+  
+  /* Smaller LEDs */
+  .led {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    border-radius: 6px;
+  }
+  
+  .led::after {
+    font-size: 7px;
+    bottom: -14px;
+  }
+  
+  /* Profile items minimal */
+  .profile-item {
+    width: 120px;
+  }
+  
+  /* Graph smaller */
+  #graph_container {
+    height: 200px;
+  }
+  
+  /* Metric values smaller */
+  .metric-value {
+    font-size: var(--text-xl);
+  }
+  
+  /* Control buttons */
+  .btn-control {
+    width: 64px;
+    height: 64px;
+  }
+  
+  /* Form inputs */
+  .form-input,
+  .form-select {
+    font-size: 16px; /* Prevents iOS zoom */
+  }
+}
+
+/* ============================================
+   VERY SMALL PHONES (< 360px)
+   ============================================ */
+
+@media (max-width: 359px) {
+  
+  .status-leds {
+    gap: var(--spacing-xs);
+  }
+  
+  .led {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+  
+  .profile-item {
+    width: 100px;
+  }
+  
+  #graph_container {
+    height: 180px;
+  }
+  
+  .btn-control {
+    width: 56px;
+    height: 56px;
+    font-size: 9px;
+  }
+}
+
+/* ============================================
+   LANDSCAPE PHONE ADJUSTMENTS
+   ============================================ */
+
+@media (max-height: 500px) and (orientation: landscape) {
+  
+  body.kiln-dashboard {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+  
+  .status-header {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+  }
+  
+  #graph_container {
+    height: 160px;
+  }
+  
+  .controls {
+    padding: var(--spacing-sm) 0;
+  }
+  
+  .btn-control {
+    width: 50px;
+    height: 50px;
+    font-size: 8px;
+  }
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --border-widget: #555;
+    --border-subtle: #444;
+    --text-muted: #999;
+  }
+}
+
+/* ============================================
+   TOUCH DEVICE OPTIMIZATIONS
+   ============================================ */
+
+@media (hover: none) and (pointer: coarse) {
+  /* Larger touch targets */
+  .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  .profile-item {
+    min-height: 44px;
+  }
+  
+  /* Remove hover effects that don't work on touch */
+  .btn:hover {
+    transform: none;
+  }
+  
+  .btn:active {
+    transform: scale(0.95);
+  }
+  
+  .profile-item:hover {
+    background: var(--bg-widget-inset);
+  }
+  
+  .profile-item:active {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+
+@media print {
+  body.kiln-dashboard {
+    background: white;
+    color: black;
+  }
+  
+  .widget {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+  
+  .controls,
+  .profile-actions,
+  .confirm-panel {
+    display: none;
+  }
+}

@@ -1,0 +1,251 @@
+/*
+ * Kiln Controller Dashboard - Layout
+ * CSS Grid based layout with responsive breakpoints
+ */
+
+/* Reset & Base */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body.kiln-dashboard {
+  margin: 0;
+  padding: var(--spacing-md);
+  background: var(--bg-body);
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.4;
+}
+
+/* Status Header */
+.status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-header);
+  border: 1px solid var(--border-widget);
+  border-radius: var(--widget-radius);
+  padding: var(--spacing-sm) var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  box-shadow: var(--shadow-widget);
+}
+
+.status-leds {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.status-state {
+  font-family: var(--font-ui);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.status-state.running {
+  color: var(--accent-primary);
+}
+
+.edit-indicator {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: rgba(230, 126, 34, 0.15);
+  border-radius: var(--btn-radius-sm);
+}
+
+/* Main Dashboard Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: var(--spacing-lg);
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* Widget Base */
+.widget {
+  background: var(--bg-widget);
+  border: 1px solid var(--border-widget);
+  border-radius: var(--widget-radius);
+  box-shadow: var(--shadow-widget);
+  overflow: hidden;
+}
+
+.widget-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-label);
+  margin: 0;
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Widget: Profiles */
+.widget-profiles {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-profiles .widget-content {
+  flex: 1;
+  padding: var(--spacing-md);
+  overflow-y: auto;
+  max-height: 500px;
+}
+
+/* Widget: Graph */
+.widget-graph {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-graph .widget-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-area {
+  flex: 1;
+  min-height: 300px;
+  padding: var(--spacing-md);
+  background: var(--bg-widget-inset);
+}
+
+.graph-stats {
+  display: flex;
+  justify-content: space-around;
+  padding: var(--spacing-md);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-widget-inset);
+}
+
+/* Widget: Insights */
+.widget-insights {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-insights .widget-content {
+  flex: 1;
+  padding: var(--spacing-md);
+}
+
+/* Last Firing Panel */
+.widget-last-firing {
+  margin-top: var(--spacing-lg);
+  grid-column: 1 / -1;
+}
+
+.widget-last-firing .collapse-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.widget-last-firing .collapse-toggle:hover {
+  color: var(--text-primary);
+}
+
+.widget-last-firing .toggle-icon {
+  transition: transform var(--transition-normal);
+}
+
+.widget-last-firing.collapsed .toggle-icon {
+  transform: rotate(-90deg);
+}
+
+.widget-last-firing .collapse-content {
+  max-height: 200px;
+  overflow: hidden;
+  transition: max-height var(--transition-normal), padding var(--transition-normal);
+  padding: 0 var(--spacing-md) var(--spacing-md);
+}
+
+.widget-last-firing.collapsed .collapse-content {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* Responsive Breakpoints - Widgets reflow, don't scale */
+
+/* Large tablets / small desktops */
+@media (max-width: 1199px) {
+  .dashboard-grid {
+    grid-template-columns: 240px 1fr;
+    grid-template-rows: auto auto;
+  }
+  
+  .widget-insights {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Tablets */
+@media (max-width: 899px) {
+  body.kiln-dashboard {
+    padding: var(--spacing-sm);
+  }
+  
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-md);
+  }
+  
+  .widget-profiles,
+  .widget-graph,
+  .widget-insights {
+    grid-column: 1;
+  }
+  
+  .status-header {
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+  }
+}
+
+/* Mobile */
+@media (max-width: 599px) {
+  body.kiln-dashboard {
+    padding: var(--spacing-xs);
+  }
+  
+  .dashboard-grid {
+    gap: var(--spacing-sm);
+  }
+  
+  .status-header {
+    padding: var(--spacing-sm);
+    border-radius: var(--widget-radius-sm);
+  }
+  
+  .widget {
+    border-radius: var(--widget-radius-sm);
+  }
+}
