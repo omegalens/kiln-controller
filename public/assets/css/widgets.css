@@ -11,6 +11,32 @@
   list-style: none;
   margin: 0;
   padding: 0;
+  scroll-behavior: smooth;
+}
+
+/* Custom Scrollbar for Profile List */
+.widget-profiles .widget-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-widget) transparent;
+}
+
+.widget-profiles .widget-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.widget-profiles .widget-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.widget-profiles .widget-content::-webkit-scrollbar-thumb {
+  background: var(--border-widget);
+  border-radius: 3px;
+  transition: background var(--transition-fast);
+}
+
+.widget-profiles .widget-content::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 .profile-item {
@@ -40,6 +66,27 @@
   color: var(--accent-primary);
 }
 
+/* Firing profile highlight (green) - shown when this profile is actively firing */
+.profile-item.firing {
+  background: rgba(39, 174, 96, 0.15);
+  border-color: var(--accent-secondary);
+}
+
+.profile-item.firing .profile-name {
+  color: var(--accent-secondary);
+}
+
+/* When both selected and firing, prioritize firing indicator */
+.profile-item.firing.selected {
+  background: rgba(39, 174, 96, 0.15);
+  border-color: var(--accent-secondary);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.profile-item.firing.selected .profile-name {
+  color: var(--accent-secondary);
+}
+
 .profile-name {
   flex: 1;
   font-size: var(--text-sm);
@@ -67,6 +114,59 @@
   min-width: 10%;
   transition: width var(--transition-normal);
   /* Width and background-color set dynamically via JS */
+}
+
+/* Hide bar and expand name on hover/selected when name is truncated */
+.profile-item:hover .profile-bar-container,
+.profile-item.selected .profile-bar-container {
+  display: none;
+}
+
+.profile-item:hover .profile-name,
+.profile-item.selected .profile-name {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+/* Marquee animation for truncated names */
+@keyframes profile-name-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  /* Pause at start */
+  10% {
+    transform: translateX(0);
+  }
+  /* Scroll to end */
+  45% {
+    transform: translateX(var(--marquee-distance));
+  }
+  /* Pause at end */
+  55% {
+    transform: translateX(var(--marquee-distance));
+  }
+  /* Scroll back to start */
+  90% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Container for marquee effect */
+.profile-item.truncated:hover .profile-name,
+.profile-item.truncated.selected .profile-name {
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.profile-item.truncated:hover .profile-name .profile-name-text,
+.profile-item.truncated.selected .profile-name .profile-name-text {
+  display: inline-block;
+  animation: profile-name-marquee 6s ease-in-out infinite;
+  animation-delay: 0.3s;
 }
 
 /* Profile Actions */
@@ -272,6 +372,19 @@
   color: var(--accent-secondary);
 }
 
+/* Heat Glow Effect for Sensor Card */
+.metric-card[data-metric="sensor"] {
+  position: relative;
+  /* Smooth transition for the glow - CSS handles the interpolation */
+  transition: box-shadow 2s ease, border-color 0.05s ease, background-color 0.05s ease;
+}
+
+/* Instant border change when heat is active */
+.metric-card[data-metric="sensor"].heat-active {
+  border: 2px solid #e74c3c;
+  background: rgba(231, 76, 60, 0.1);
+}
+
 /* Progress Bar */
 .progress-container {
   position: relative;
@@ -307,8 +420,18 @@
 .controls {
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: var(--spacing-lg);
   padding: var(--spacing-md) 0;
+  position: relative;
+}
+
+/* Alert indicator positioned to the left of center */
+.controls .alert-indicator {
+  position: absolute;
+  left: var(--spacing-md);
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .btn-control {
@@ -323,7 +446,7 @@
   letter-spacing: 1px;
   cursor: pointer;
   transition: all var(--transition-fast);
-  box-shadow: 
+  box-shadow:
     0 4px 15px rgba(0, 0, 0, 0.3),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
@@ -335,7 +458,7 @@
 
 .btn-start:hover {
   transform: scale(1.05);
-  box-shadow: 
+  box-shadow:
     0 6px 25px rgba(46, 204, 113, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
@@ -351,7 +474,7 @@
 
 .btn-stop:hover {
   transform: scale(1.05);
-  box-shadow: 
+  box-shadow:
     0 6px 25px rgba(231, 76, 60, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
@@ -475,4 +598,56 @@
 .status-badge.emergency {
   background: rgba(231, 76, 60, 0.2);
   color: var(--accent-danger-bright);
+}
+
+/* ============================================
+   SIMULATION MODE
+   ============================================ */
+
+.metric-card.sim-mode {
+  border: 1px solid var(--accent-primary);
+  position: relative;
+}
+
+.metric-card.sim-mode::after {
+  content: 'SIM';
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent-primary);
+  letter-spacing: 0.5px;
+}
+
+.metric-input {
+  width: 100%;
+  max-width: 100px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--btn-radius-sm);
+  color: var(--accent-primary);
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  text-align: center;
+  line-height: 1.2;
+  margin-bottom: var(--spacing-xs);
+}
+
+.metric-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(230, 126, 34, 0.2);
+}
+
+.metric-input::-webkit-inner-spin-button,
+.metric-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.metric-input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }

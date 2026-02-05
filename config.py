@@ -163,6 +163,10 @@ pid_kp = 10   # Proportional 25,200,200
 pid_ki = 80   # Integral
 pid_kd = 220.83497910261562 # Derivative
 
+# Rate at which integral term decays during controlled cooling
+# This prevents accumulated heating integral from keeping heat on during cooling
+pid_integral_decay_rate = 0.5  # Higher = faster decay
+
 ########################################################################
 #
 # Initial heating and Integral Windup
@@ -175,17 +179,29 @@ stop_integral_windup = True
 #
 #   Simulation parameters
 simulate = True
-sim_t_env      = 65   # deg
-sim_c_heat     = 50.0  # J/K  heat capacity of heat element
-sim_c_oven     = 500.0 # J/K  heat capacity of oven
+
+# Initial sensor temperature when simulation starts (degrees in temp_scale units)
+# Set this to test starting from a pre-heated kiln state
+sim_initial_temp = 65   # Starting sensor temperature for simulation
+
+# Environment/ambient temperature - used for heat loss calculations
+sim_t_env      = 65   # deg - ambient temp outside the kiln
+
+# Thermal simulation parameters
+sim_c_heat     = 500.0  # J/K  heat capacity of heat element
+sim_c_oven     = 5000.0 # J/K  heat capacity of oven
 sim_p_heat     = 5450.0 # W    heating power of oven
-sim_R_o_nocool = 0.5   # K/W  thermal resistance oven -> environment
+sim_R_o_nocool = 1.0   # K/W  thermal resistance oven -> environment (higher = better insulation, slower cooling)
 sim_R_o_cool   = 0.05   # K/W  " with cooling
 sim_R_ho_noair = 0.1    # K/W  thermal resistance heat element -> oven
 sim_R_ho_air   = 0.05   # K/W  " with internal air circulation
 
-# if you want simulations to happen faster than real time, this can be
-# set as high as 1000 to speed simulations up by 1000 times.
+# Simulation speedup factor
+# Set this > 1 to run simulations faster than real time.
+# For example, sim_speedup_factor = 10 runs 10x faster (1 hour takes 6 minutes).
+# Set as high as 1000 for rapid testing of complete profiles.
+# This affects all simulation timing: temperature changes, hold durations, etc.
+# NOTE: Only affects simulation mode, has no effect on RealOven deployment.
 sim_speedup_factor = 1
 
 

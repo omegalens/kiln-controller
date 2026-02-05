@@ -23,19 +23,6 @@
 </head>
 <body class="kiln-dashboard">
 
-  <!-- Status Header -->
-  <header class="status-header">
-    <div class="status-leds">
-      <span class="led" id="heat" data-label="Heat">&#92;</span>
-      <span class="led" id="cool" data-label="Cool">&#108;</span>
-      <span class="led" id="air" data-label="Air">&#91;</span>
-      <span class="led" id="hazard" data-label="Alert">&#73;</span>
-      <span class="led" id="door" data-label="Door">&#9832;</span>
-    </div>
-    <div class="status-state" id="state">IDLE</div>
-    <div class="edit-indicator" id="edit-indicator" style="display:none;">EDITING</div>
-  </header>
-
   <!-- Main Dashboard Grid -->
   <main class="dashboard-grid">
     
@@ -109,6 +96,7 @@
           <div class="metric-card" data-metric="sensor">
             <span class="metric-label">Sensor</span>
             <span class="metric-value" id="act_temp">---</span>
+            <input type="number" class="metric-input" id="act_temp_input" style="display:none;" />
             <span class="metric-unit" id="act_temp_scale">°C</span>
           </div>
           <div class="metric-card" data-metric="target">
@@ -146,8 +134,18 @@
 
         <!-- Control Buttons -->
         <div class="controls" id="btn_controls">
+          <div class="alert-indicator" id="alert-indicator">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2L1 21h22L12 2zm0 3.5L19.5 19h-15L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/>
+            </svg>
+          </div>
           <button id="btn_start" class="btn-control btn-start">START</button>
           <button id="btn_stop" class="btn-control btn-stop" style="display:none;">STOP</button>
+        </div>
+
+        <!-- Alert Message Box -->
+        <div class="alert-message-box" id="alert-message-box" style="display:none;">
+          <span id="alert-message-text"></span>
         </div>
 
         <!-- Slide-out Confirmation Panel -->

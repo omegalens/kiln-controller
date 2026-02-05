@@ -130,6 +130,21 @@ def handle_api():
         else:
             return {"success": False, "error": "No PID stats available"}
     
+    elif cmd == 'set_sim_temp':
+        log.info("api set_sim_temp command received")
+        if not config.simulate:
+            return {"success": False, "error": "set_sim_temp only works in simulation mode"}
+        temp = bottle.request.json.get('temperature')
+        if temp is None:
+            return {"success": False, "error": "No temperature provided"}
+        try:
+            temp = float(temp)
+            oven.board.temp_sensor.simulated_temperature = temp
+            log.info("Simulated temperature set to %s" % temp)
+            return {"success": True, "temperature": temp}
+        except (ValueError, AttributeError) as e:
+            return {"success": False, "error": str(e)}
+    
     else:
         return {"success": False, "error": "Unknown command: %s" % cmd}
 

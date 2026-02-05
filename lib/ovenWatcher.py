@@ -71,12 +71,14 @@ class OvenWatcher(threading.Thread):
         else:
             p = None
         
+        log_subset = self.lastlog_subset()
         backlog = {
             'type': "backlog",
             'profile': p,
-            'log': self.lastlog_subset(),
+            'log': log_subset,
             #'started': self.started
         }
+        
         print(backlog)
         backlog_json = json.dumps(backlog)
         try:

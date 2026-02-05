@@ -5,12 +5,13 @@
 
 var state = "IDLE";
 var state_last = "";
-var graph = [ 'profile', 'live'];
+var graph = ['profile', 'live'];
 var points = [];
 var profiles = [];
 var time_mode = 0;
 var selected_profile = 0;
 var selected_profile_name = 'cone-05-long-bisque.json';
+var firing_profile_name = null; // Track the profile currently being fired
 var temp_scale = "c";
 var time_scale_slope = "s";
 var time_scale_profile = "h";
@@ -20,6 +21,17 @@ var kwh_rate = 0.26;
 var kw_elements = 9.460;
 var currency_type = "EUR";
 var last_firing_data = null;
+var is_sim_mode = false;
+
+// Heat glow effect state
+var glow_intensity = 0;           // 0 to 1 scale
+var glow_target = 0;              // Target intensity (1 when heat on, 0 when off)
+var glow_animation_frame = null;  // Animation frame reference
+var heat_on = false;              // Current heat state
+
+// Alert indicator state
+var alert_active = false;
+var alert_message = '';
 
 // V2 profile format (rate-based segments)
 var profile_version = 1;
@@ -31,6 +43,9 @@ var use_v2_editor = true;
 var run_actual_start_temp = null;
 var profile_adjusted_for_run = false;
 
+// Store pending backlog data until profiles are loaded
+var pending_backlog = null;
+
 // WebSocket setup
 var protocol = 'ws:';
 if (window.location.protocol == 'https:') {
@@ -38,12 +53,12 @@ if (window.location.protocol == 'https:') {
 }
 var host = "" + protocol + "//" + window.location.hostname + ":" + window.location.port;
 
-var ws_status = new WebSocket(host+"/status");
-var ws_control = new WebSocket(host+"/control");
-var ws_config = new WebSocket(host+"/config");
-var ws_storage = new WebSocket(host+"/storage");
+var ws_status = new WebSocket(host + "/status");
+var ws_control = new WebSocket(host + "/control");
+var ws_config = new WebSocket(host + "/config");
+var ws_storage = new WebSocket(host + "/storage");
 
-if(window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;
+if (window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;
 
 // Graph series configuration - dark theme colors
 graph.profile = {
@@ -82,10 +97,10 @@ function getTempColor(tempF) {
         { temp: 2180, color: [230, 126, 34] },   // orange
         { temp: 2400, color: [231, 76, 60] }     // red
     ];
-    
+
     if (tempF <= stops[0].temp) return 'rgb(' + stops[0].color.join(',') + ')';
     if (tempF >= stops[3].temp) return 'rgb(' + stops[3].color.join(',') + ')';
-    
+
     for (var i = 0; i < stops.length - 1; i++) {
         if (tempF >= stops[i].temp && tempF <= stops[i + 1].temp) {
             var ratio = (tempF - stops[i].temp) / (stops[i + 1].temp - stops[i].temp);
@@ -107,7 +122,7 @@ function getDurationWidth(durationHours) {
     var maxHours = 18;
     var minWidth = 20;
     var maxWidth = 100;
-    
+
     var clamped = Math.max(minHours, Math.min(maxHours, durationHours));
     return ((clamped - minHours) / (maxHours - minHours)) * (maxWidth - minWidth) + minWidth;
 }
@@ -117,7 +132,7 @@ function getDurationWidth(durationHours) {
  */
 function getProfilePeakTemp(profile) {
     var peakTemp = 0;
-    
+
     if (isV2Profile(profile)) {
         var segments = profile.segments || [];
         for (var i = 0; i < segments.length; i++) {
@@ -133,7 +148,7 @@ function getProfilePeakTemp(profile) {
             }
         }
     }
-    
+
     return peakTemp;
 }
 
@@ -147,7 +162,7 @@ function getProfileDuration(profile) {
     } else {
         displayData = profile.data || [];
     }
-    
+
     if (displayData.length === 0) return 0;
     var totalSeconds = displayData[displayData.length - 1][0];
     return totalSeconds / 3600;
@@ -160,49 +175,94 @@ function getProfileDuration(profile) {
 function renderProfileList() {
     var $list = $('#profile-list');
     $list.empty();
-    
+
+    // Sort profiles by peak temperature (highest first)
+    var sortedIndices = [];
     for (var i = 0; i < profiles.length; i++) {
+        sortedIndices.push(i);
+    }
+    sortedIndices.sort(function(a, b) {
+        return getProfilePeakTemp(profiles[b]) - getProfilePeakTemp(profiles[a]);
+    });
+
+    for (var j = 0; j < sortedIndices.length; j++) {
+        var i = sortedIndices[j];
         var profile = profiles[i];
         var peakTemp = getProfilePeakTemp(profile);
         var durationHours = getProfileDuration(profile);
         var tempColor = getTempColor(peakTemp);
         var barWidth = getDurationWidth(durationHours);
-        
+
         var isSelected = (i === selected_profile);
-        var itemClass = 'profile-item' + (isSelected ? ' selected' : '');
-        
+        var isFiring = (firing_profile_name !== null && profile.name === firing_profile_name);
+        var itemClass = 'profile-item';
+        if (isFiring) itemClass += ' firing';
+        if (isSelected) itemClass += ' selected';
+
         var html = '<li class="' + itemClass + '" data-index="' + i + '">';
-        html += '<span class="profile-name">' + profile.name + '</span>';
+        html += '<span class="profile-name"><span class="profile-name-text">' + profile.name + '</span></span>';
         html += '<div class="profile-bar-container">';
         html += '<div class="profile-bar" style="width: ' + barWidth + '%; background-color: ' + tempColor + ';"></div>';
         html += '</div>';
         html += '</li>';
-        
+
         $list.append(html);
     }
-    
+
     // Bind click events
-    $('.profile-item').on('click', function() {
+    $('.profile-item').on('click', function () {
         var index = $(this).data('index');
         selectProfile(index);
+    });
+
+    // Check for truncated names and apply marquee
+    updateProfileTruncation();
+}
+
+/**
+ * Check each profile name for text overflow and apply .truncated class
+ * Also calculates the marquee scroll distance for the animation
+ */
+function updateProfileTruncation() {
+    $('.profile-item').each(function() {
+        var $item = $(this);
+        var $name = $item.find('.profile-name');
+        var $nameText = $item.find('.profile-name-text');
+        
+        // Temporarily remove truncated class to measure true width
+        $item.removeClass('truncated');
+        
+        // Get the container width and text width
+        var containerWidth = $name.width();
+        var textWidth = $nameText[0].scrollWidth;
+        
+        if (textWidth > containerWidth) {
+            $item.addClass('truncated');
+            // Calculate scroll distance (negative because we scroll left)
+            var distance = -(textWidth - containerWidth + 20); // 20px extra padding
+            $item.css('--marquee-distance', distance + 'px');
+        }
     });
 }
 
 function selectProfile(index) {
     selected_profile = index;
     selected_profile_name = profiles[index].name;
-    
+
     // Update visual selection
     $('.profile-item').removeClass('selected');
     $('.profile-item[data-index="' + index + '"]').addClass('selected');
-    
+
+    // Re-check truncation since bar is now hidden on selected item
+    updateProfileTruncation();
+
     updateProfile(index);
 }
 
 function updateProfile(id) {
     selected_profile = id;
     selected_profile_name = profiles[id].name;
-    
+
     var profile = profiles[id];
     var displayData;
     if (isV2Profile(profile)) {
@@ -210,18 +270,18 @@ function updateProfile(id) {
     } else {
         displayData = profile.data || [];
     }
-    
-    var job_seconds = displayData.length === 0 ? 0 : parseInt(displayData[displayData.length-1][0]);
+
+    var job_seconds = displayData.length === 0 ? 0 : parseInt(displayData[displayData.length - 1][0]);
     var kwh = (kw_elements * job_seconds / 3600).toFixed(2);
     var cost = (kwh * kwh_rate).toFixed(2);
     var job_time = new Date(job_seconds * 1000).toISOString().substr(11, 8);
-    
+
     $('#sel_prof').html(profiles[id].name);
     $('#sel_prof_eta').html(job_time);
     $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + ': ' + cost + ')');
-    
+
     graph.profile.data = displayData;
-    
+
     if (run_actual_start_temp !== null && profile_adjusted_for_run) {
         adjustProfileForActualStartTemp(run_actual_start_temp);
     } else {
@@ -258,8 +318,8 @@ function updateProfileTable() {
     html += '<tr><th>#</th><th>Time (' + time_scale_long + ')</th><th>Temp (°' + temp_scale_display + ')</th><th>Rate</th><th></th></tr>';
 
     for (var i = 0; i < graph.profile.data.length; i++) {
-        if (i >= 1) dps = ((graph.profile.data[i][1] - graph.profile.data[i-1][1]) / (graph.profile.data[i][0] - graph.profile.data[i-1][0]) * 10) / 10;
-        
+        if (i >= 1) dps = ((graph.profile.data[i][1] - graph.profile.data[i - 1][1]) / (graph.profile.data[i][0] - graph.profile.data[i - 1][0]) * 10) / 10;
+
         if (dps > 0) { slope = "↑"; color = "var(--accent-danger)"; }
         else if (dps < 0) { slope = "↓"; color = "var(--led-cool)"; dps *= -1; }
         else { slope = "→"; color = "var(--text-muted)"; }
@@ -276,15 +336,15 @@ function updateProfileTable() {
     html += '<button class="btn btn-secondary mt-md" id="toggle_v2_editor">Switch to Rate Editor</button>';
 
     $('#profile_table').html(html);
-    
-    $('#toggle_v2_editor').click(function() {
+
+    $('#toggle_v2_editor').click(function () {
         use_v2_editor = true;
         profile_segments = legacyToSegments(graph.profile.data);
         profile_start_temp = graph.profile.data && graph.profile.data.length > 0 ? graph.profile.data[0][1] : 65;
         updateProfileTable_v2();
     });
 
-    $(".form-input").change(function(e) {
+    $(".form-input").change(function (e) {
         var id = $(this)[0].id;
         var value = parseInt($(this)[0].value);
         var fields = id.split("-");
@@ -339,26 +399,26 @@ function loadProfileForEditing(profile) {
 function legacyToSegments(data) {
     var segments = [];
     if (!data || data.length < 2) return segments;
-    
+
     for (var i = 1; i < data.length; i++) {
-        var prevTime = data[i-1][0];
-        var prevTemp = data[i-1][1];
+        var prevTime = data[i - 1][0];
+        var prevTemp = data[i - 1][1];
         var currTime = data[i][0];
         var currTemp = data[i][1];
-        
+
         var timeDiff = currTime - prevTime;
         var tempDiff = currTemp - prevTemp;
-        
+
         if (timeDiff > 0) {
             if (tempDiff !== 0) {
                 var rate = (tempDiff / timeDiff) * 3600;
-                segments.push({rate: Math.round(rate * 10) / 10, target: currTemp, hold: 0});
+                segments.push({ rate: Math.round(rate * 10) / 10, target: currTemp, hold: 0 });
             } else {
                 var holdMinutes = timeDiff / 60;
                 if (segments.length > 0 && segments[segments.length - 1].target === currTemp) {
                     segments[segments.length - 1].hold += holdMinutes;
                 } else {
-                    segments.push({rate: 0, target: currTemp, hold: holdMinutes});
+                    segments.push({ rate: 0, target: currTemp, hold: holdMinutes });
                 }
             }
         }
@@ -370,11 +430,11 @@ function segmentsToLegacy(startTemp, segments) {
     var data = [[0, startTemp]];
     var currentTime = 0;
     var currentTemp = startTemp;
-    
+
     for (var i = 0; i < segments.length; i++) {
         var seg = segments[i];
         var rate = seg.rate;
-        
+
         if (typeof rate === 'string') {
             var tempDiff = Math.abs(seg.target - currentTemp);
             var estRate = rate === "max" ? 500 : 100;
@@ -390,7 +450,7 @@ function segmentsToLegacy(startTemp, segments) {
             currentTemp = seg.target;
             data.push([Math.round(currentTime), currentTemp]);
         }
-        
+
         if (seg.hold > 0) {
             currentTime += seg.hold * 60;
             data.push([Math.round(currentTime), currentTemp]);
@@ -401,16 +461,16 @@ function segmentsToLegacy(startTemp, segments) {
 
 function adjustProfileForActualStartTemp(actualTemp) {
     if (!profiles[selected_profile]) return;
-    
+
     var profile = profiles[selected_profile];
     var segments = [];
-    
+
     if (isV2Profile(profile)) {
         segments = profile.segments || [];
     } else {
         segments = legacyToSegments(profile.data);
     }
-    
+
     graph.profile.data = segmentsToLegacy(actualTemp, segments);
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
     console.log("Profile graph adjusted to start from actual temp: " + actualTemp);
@@ -425,6 +485,35 @@ function resetProfileToDefault() {
     }
 }
 
+// Process backlog data after profiles are loaded
+function processBacklog(backlogData) {
+    var x = backlogData;
+    
+    $.each(profiles, function (i, v) {
+        if (v.name == x.profile.name) {
+            selected_profile = i;
+            $('#sel_prof').html(v.name);
+            renderProfileList();
+        }
+    });
+
+    if (x.log && x.log.length > 0) {
+        var firstLogTemp = x.log[0].temperature;
+        run_actual_start_temp = firstLogTemp;
+        profile_adjusted_for_run = true;
+        adjustProfileForActualStartTemp(firstLogTemp);
+    } else if (x.profile.data && x.profile.data.length > 0) {
+        graph.profile.data = x.profile.data;
+    }
+    
+    // Process log entries
+    $.each(x.log, function (i, v) {
+        var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
+        graph.live.data.push([xTime, v.temperature]);
+    });
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+}
+
 function updateProfileTable_v2() {
     var html = '<h3 class="text-secondary mt-md">Firing Segments</h3>';
     html += '<div class="form-group">';
@@ -432,19 +521,19 @@ function updateProfileTable_v2() {
     html += '<input type="text" class="form-input form-input-sm" id="start_temp_input" value="' + profile_start_temp + '" style="width: 100px" />';
     html += ' °' + temp_scale_display;
     html += '</div>';
-    
+
     html += '<div class="table-responsive"><table class="segment-table">';
     html += '<tr><th>#</th><th>Rate (°' + temp_scale_display + '/hr)</th>';
     html += '<th>Target (°' + temp_scale_display + ')</th>';
     html += '<th>Hold (min)</th><th>Est.</th><th></th></tr>';
-    
+
     var cumulative_time = 0;
     var current_temp = profile_start_temp;
-    
+
     for (var i = 0; i < profile_segments.length; i++) {
         var seg = profile_segments[i];
         var seg_time = 0;
-        
+
         var rate = seg.rate;
         if (typeof rate === 'number' && rate !== 0) {
             var temp_diff = Math.abs(seg.target - current_temp);
@@ -458,9 +547,9 @@ function updateProfileTable_v2() {
         }
         seg_time += seg.hold || 0;
         cumulative_time += seg_time;
-        
+
         var time_str = formatMinutesToHHMM(cumulative_time);
-        
+
         html += '<tr>';
         html += '<td>' + (i + 1) + '</td>';
         html += '<td><input type="text" class="form-input form-input-sm seg-rate" data-idx="' + i + '" value="' + seg.rate + '" /></td>';
@@ -469,32 +558,32 @@ function updateProfileTable_v2() {
         html += '<td class="text-muted">' + time_str + '</td>';
         html += '<td><button class="btn-delete-segment del-segment" data-idx="' + i + '">×</button></td>';
         html += '</tr>';
-        
+
         current_temp = seg.target;
     }
-    
+
     html += '</table></div>';
     html += '<div class="flex gap-sm mt-md">';
     html += '<button class="btn btn-success" id="add_segment">+ Segment</button>';
     html += '<button class="btn btn-secondary" id="toggle_v1_editor">Point Editor</button>';
     html += '</div>';
-    
+
     $('#profile_table').html(html);
     bindSegmentEvents();
     updateGraphFromSegments();
 }
 
 function bindSegmentEvents() {
-    $('#start_temp_input').change(function() {
+    $('#start_temp_input').change(function () {
         profile_start_temp = parseFloat($(this).val()) || 65;
         updateGraphFromSegments();
         updateProfileTable_v2();
     });
-    
-    $('.seg-rate, .seg-target, .seg-hold').change(function() {
+
+    $('.seg-rate, .seg-target, .seg-hold').change(function () {
         var idx = $(this).data('idx');
         var value = $(this).val();
-        
+
         if ($(this).hasClass('seg-rate')) {
             if (value === 'max' || value === 'cool') {
                 profile_segments[idx].rate = value;
@@ -506,20 +595,20 @@ function bindSegmentEvents() {
         } else if ($(this).hasClass('seg-hold')) {
             profile_segments[idx].hold = parseFloat(value) || 0;
         }
-        
+
         updateGraphFromSegments();
         updateProfileTable_v2();
     });
-    
-    $('.del-segment').click(function() {
+
+    $('.del-segment').click(function () {
         var idx = $(this).data('idx');
         profile_segments.splice(idx, 1);
         updateGraphFromSegments();
         updateProfileTable_v2();
     });
-    
-    $('#add_segment').click(function() {
-        var last_temp = profile_segments.length > 0 ? 
+
+    $('#add_segment').click(function () {
+        var last_temp = profile_segments.length > 0 ?
             profile_segments[profile_segments.length - 1].target : profile_start_temp;
         profile_segments.push({
             rate: 100,
@@ -529,8 +618,8 @@ function bindSegmentEvents() {
         updateGraphFromSegments();
         updateProfileTable_v2();
     });
-    
-    $('#toggle_v1_editor').click(function() {
+
+    $('#toggle_v1_editor').click(function () {
         use_v2_editor = false;
         graph.profile.data = segmentsToLegacy(profile_start_temp, profile_segments);
         updateProfileTable();
@@ -590,6 +679,177 @@ function hazardTemp() {
     }
 }
 
+// =============================================================================
+// Heat Glow Effect
+// =============================================================================
+
+function updateHeatGlow(isHeating) {
+    var $sensorCard = $('[data-metric="sensor"]');
+    
+    // Set target intensity based on heating state
+    var newHeatState = isHeating;
+    
+    if (newHeatState !== heat_on) {
+        heat_on = newHeatState;
+        
+        // Instantly toggle the border/background
+        if (heat_on) {
+            $sensorCard.addClass('heat-active');
+            glow_target = 1;
+        } else {
+            $sensorCard.removeClass('heat-active');
+            glow_target = 0;
+        }
+    }
+    
+    // Start glow animation if not already running
+    if (glow_animation_frame === null) {
+        animateGlow();
+    }
+}
+
+function animateGlow() {
+    var $sensorCard = $('[data-metric="sensor"]');
+    
+    // Smoothly interpolate glow_intensity toward glow_target
+    var diff = glow_target - glow_intensity;
+    
+    if (Math.abs(diff) > 0.002) {
+        // Very slow rates - heat up slowly, cool down even slower (like real kiln coils)
+        // These rates are per animation frame (~16ms), so multiply by 60 for per-second rate
+        var rate = diff > 0 ? 0.008 : 0.004;
+        glow_intensity += diff * rate;
+        
+        // Clamp to valid range
+        glow_intensity = Math.max(0, Math.min(1, glow_intensity));
+        
+        // Apply smooth glow via inline box-shadow
+        applyGlowSmooth($sensorCard, glow_intensity);
+        
+        // Continue animation
+        glow_animation_frame = requestAnimationFrame(animateGlow);
+    } else {
+        // Snap to target and stop animating
+        glow_intensity = glow_target;
+        applyGlowSmooth($sensorCard, glow_intensity);
+        glow_animation_frame = null;
+    }
+}
+
+function applyGlowSmooth($card, intensity) {
+    // Calculate box-shadow values based on intensity (0-1)
+    // At max intensity: moderate glow that's visible but not overwhelming
+    if (intensity < 0.01) {
+        $card.css('box-shadow', 'none');
+        return;
+    }
+    
+    // Outer glow parameters (scaled by intensity)
+    var outerBlur = Math.round(intensity * 25);      // 0-25px blur
+    var outerSpread = Math.round(intensity * 8);     // 0-8px spread
+    var outerOpacity = (intensity * 0.6).toFixed(2); // 0-0.6 opacity
+    
+    // Secondary outer glow (orange, larger)
+    var outer2Blur = Math.round(intensity * 40);     // 0-40px
+    var outer2Spread = Math.round(intensity * 12);   // 0-12px
+    var outer2Opacity = (intensity * 0.35).toFixed(2);
+    
+    // Inner glow
+    var innerBlur = Math.round(intensity * 20);      // 0-20px
+    var innerOpacity = (intensity * 0.25).toFixed(2);
+    
+    var boxShadow = 
+        '0 0 ' + outerBlur + 'px ' + outerSpread + 'px rgba(231, 76, 60, ' + outerOpacity + '), ' +
+        '0 0 ' + outer2Blur + 'px ' + outer2Spread + 'px rgba(230, 126, 34, ' + outer2Opacity + '), ' +
+        'inset 0 0 ' + innerBlur + 'px rgba(231, 76, 60, ' + innerOpacity + ')';
+    
+    $card.css('box-shadow', boxShadow);
+}
+
+// Test function - call from browser console: testGlow(true) or testGlow(false)
+window.testGlow = function(on) {
+    console.log('Testing glow:', on);
+    updateHeatGlow(on);
+};
+
+// Instantly set glow to a specific level for testing: testGlowLevel(0.5)
+window.testGlowLevel = function(level) {
+    var $sensorCard = $('[data-metric="sensor"]');
+    if (level > 0) {
+        $sensorCard.addClass('heat-active');
+    } else {
+        $sensorCard.removeClass('heat-active');
+    }
+    glow_intensity = level;
+    glow_target = level;
+    applyGlowSmooth($sensorCard, level);
+    console.log('Glow set to level:', level);
+};
+
+// =============================================================================
+// Alert Indicator
+// =============================================================================
+
+function updateAlertIndicator(isActive, message) {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+    var $messageText = $('#alert-message-text');
+    
+    if (isActive && !alert_active) {
+        // Activate alert
+        alert_active = true;
+        $indicator.addClass('active');
+        
+        if (message) {
+            alert_message = message;
+            $messageText.text(message);
+            $messageBox.show();
+        }
+    } else if (!isActive && alert_active) {
+        // Deactivate alert
+        alert_active = false;
+        $indicator.removeClass('active flashing');
+        $messageBox.hide();
+        alert_message = '';
+    } else if (isActive && message && message !== alert_message) {
+        // Update message while alert is active
+        alert_message = message;
+        $messageText.text(message);
+        $messageBox.show();
+    }
+}
+
+function showAlertMessage(message) {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+    var $messageText = $('#alert-message-text');
+    
+    alert_active = true;
+    alert_message = message;
+    $indicator.addClass('active');
+    $messageText.text(message);
+    $messageBox.show();
+}
+
+function hideAlertMessage() {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+    
+    alert_active = false;
+    alert_message = '';
+    $indicator.removeClass('active flashing');
+    $messageBox.hide();
+}
+
+function setAlertFlashing(shouldFlash) {
+    var $indicator = $('#alert-indicator');
+    if (shouldFlash) {
+        $indicator.addClass('flashing');
+    } else {
+        $indicator.removeClass('flashing');
+    }
+}
+
 function timeTickFormatter(val, axis) {
     if (axis.max > 3600) {
         return Math.floor(val / 3600);
@@ -612,16 +872,20 @@ function runTask() {
         "profile": profiles[selected_profile]
     };
 
+    // Track the firing profile name for highlighting
+    firing_profile_name = profiles[selected_profile].name;
+    renderProfileList();
+
     graph.live.data = [];
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
     ws_control.send(JSON.stringify(cmd));
-    
+
     // Hide confirmation panel
     hideConfirmation();
 }
 
 function abortTask() {
-    var cmd = {"cmd": "STOP"};
+    var cmd = { "cmd": "STOP" };
     ws_control.send(JSON.stringify(cmd));
 }
 
@@ -635,7 +899,7 @@ function showConfirmation() {
 
 function hideConfirmation() {
     $('#confirm-panel').removeClass('visible');
-    setTimeout(function() {
+    setTimeout(function () {
         if (!$('#confirm-panel').hasClass('visible')) {
             $('#confirm-panel').hide();
         }
@@ -649,17 +913,16 @@ function hideConfirmation() {
 function enterNewMode() {
     use_v2_editor = true;
     state = "EDIT";
-    
-    $('#edit-indicator').show();
+
     $('#btn_controls').hide();
     $('#edit-panel').slideDown();
     $('#form_profile_name').val('').attr('placeholder', 'Enter profile name');
-    
+
     graph.profile.points.show = true;
     graph.profile.draggable = true;
     graph.profile.data = [];
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    
+
     profile_version = 2;
     profile_segments = [];
     profile_start_temp = 65;
@@ -669,19 +932,18 @@ function enterNewMode() {
 
 function enterEditMode() {
     state = "EDIT";
-    
-    $('#edit-indicator').show();
+
     $('#btn_controls').hide();
     $('#edit-panel').slideDown();
     $('#form_profile_name').val(profiles[selected_profile].name);
-    
+
     graph.profile.points.show = true;
     graph.profile.draggable = true;
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    
+
     var profile = profiles[selected_profile];
     loadProfileForEditing(profile);
-    
+
     if (use_v2_editor) {
         updateProfileTable_v2();
     } else {
@@ -694,12 +956,11 @@ function leaveEditMode() {
     selected_profile_name = $('#form_profile_name').val();
     ws_storage.send('GET');
     state = "IDLE";
-    
-    $('#edit-indicator').hide();
+
     $('#edit-panel').slideUp();
     $('#btn_controls').show();
     $('#profile_table').slideUp();
-    
+
     graph.profile.points.show = false;
     graph.profile.draggable = false;
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
@@ -707,7 +968,7 @@ function leaveEditMode() {
 
 function newPoint() {
     if (graph.profile.data.length > 0) {
-        var pointx = parseInt(graph.profile.data[graph.profile.data.length-1][0]) + 15;
+        var pointx = parseInt(graph.profile.data[graph.profile.data.length - 1][0]) + 15;
     } else {
         var pointx = 0;
     }
@@ -734,48 +995,48 @@ function deleteProfile() {
     var profile = { "type": "profile", "data": "", "name": selected_profile_name };
     var delete_struct = { "cmd": "DELETE", "profile": profile };
     var delete_cmd = JSON.stringify(delete_struct);
-    
+
     console.log("Delete profile:" + selected_profile_name);
     ws_storage.send(delete_cmd);
     ws_storage.send('GET');
-    
+
     selected_profile_name = profiles[0] ? profiles[0].name : '';
     leaveEditMode();
 }
 
 function saveProfile() {
     var name = $('#form_profile_name').val();
-    
+
     if (!name || name.trim() === '') {
         showAlert('error', 'Please enter a profile name');
         return false;
     }
-    
+
     var profile;
-    
+
     if (use_v2_editor && profile_segments.length > 0) {
         var valid = true;
         var current_temp = profile_start_temp;
-        
+
         for (var i = 0; i < profile_segments.length; i++) {
             var seg = profile_segments[i];
             if (typeof seg.rate === 'number' && seg.rate !== 0) {
                 if (seg.rate > 0 && seg.target < current_temp) {
                     valid = false;
-                    showAlert('error', 'Segment ' + (i+1) + ': Positive rate with decreasing target');
+                    showAlert('error', 'Segment ' + (i + 1) + ': Positive rate with decreasing target');
                     break;
                 }
                 if (seg.rate < 0 && seg.target > current_temp) {
                     valid = false;
-                    showAlert('error', 'Segment ' + (i+1) + ': Negative rate with increasing target');
+                    showAlert('error', 'Segment ' + (i + 1) + ': Negative rate with increasing target');
                     break;
                 }
             }
             current_temp = seg.target;
         }
-        
+
         if (!valid) return false;
-        
+
         profile = {
             "type": "profile",
             "version": 2,
@@ -801,7 +1062,7 @@ function saveProfile() {
 
         profile = { "type": "profile", "data": data, "name": name };
     }
-    
+
     var put = { "cmd": "PUT", "profile": profile };
     var put_cmd = JSON.stringify(put);
     ws_storage.send(put_cmd);
@@ -816,7 +1077,7 @@ function showAlert(type, message) {
     $.bootstrapGrowl('<b>' + (type === 'error' ? 'ERROR' : 'INFO') + ':</b> ' + message, {
         ele: 'body',
         type: type === 'error' ? 'danger' : type,
-        offset: {from: 'top', amount: 80},
+        offset: { from: 'top', amount: 80 },
         align: 'center',
         width: 350,
         delay: 5000,
@@ -887,7 +1148,7 @@ function fetchLastFiring() {
         url: '/api/last_firing',
         type: 'GET',
         dataType: 'json',
-        success: function(data) {
+        success: function (data) {
             if (data && !data.error) {
                 last_firing_data = data;
                 displayLastFiring(data);
@@ -895,7 +1156,7 @@ function fetchLastFiring() {
                 $('#last_firing_panel').hide();
             }
         },
-        error: function() {
+        error: function () {
             $('#last_firing_panel').hide();
         }
     });
@@ -910,11 +1171,11 @@ function displayLastFiring(data) {
     var duration_str = new Date(data.duration_seconds * 1000).toISOString().substr(11, 8);
     var end_time = new Date(data.end_time);
     var timestamp_str = end_time.toLocaleString();
-    
+
     var status_str = data.status || 'completed';
     var status_class = 'completed';
     var status_text = 'Completed';
-    
+
     if (status_str === 'aborted') {
         status_class = 'aborted';
         status_text = 'Aborted';
@@ -922,16 +1183,16 @@ function displayLastFiring(data) {
         status_class = 'emergency';
         status_text = 'Emergency Stop';
     }
-    
+
     var status_html = '<span class="status-badge ' + status_class + '">' + status_text + '</span>';
-    
+
     $('#last_firing_profile').text(data.profile_name || '-');
     $('#last_firing_status').html(status_html);
     $('#last_firing_duration').text(duration_str);
     $('#last_firing_cost').text((data.currency_type || '$') + ' ' + (data.final_cost || 0).toFixed(2));
     $('#last_firing_divergence').text((data.avg_divergence || 0).toFixed(2) + '°' + (data.temp_scale === 'f' ? 'F' : 'C'));
     $('#last_firing_timestamp').text(timestamp_str);
-    
+
     // Restore collapsed state from localStorage
     var isCollapsed = localStorage.getItem('lastFiringCollapsed') === 'true';
     if (isCollapsed) {
@@ -939,7 +1200,7 @@ function displayLastFiring(data) {
     } else {
         $('#last_firing_panel').removeClass('collapsed');
     }
-    
+
     if (state === 'IDLE') {
         $('#last_firing_panel').show();
     }
@@ -953,7 +1214,7 @@ function hideLastFiring() {
 // Document Ready - Initialize
 // =============================================================================
 
-$(document).ready(function() {
+$(document).ready(function () {
     if (!("WebSocket" in window)) {
         $('body').html('<div class="widget" style="margin: 50px auto; max-width: 400px; padding: 40px; text-align: center;"><h2>Browser Not Supported</h2><p>Please use a browser that supports WebSockets, such as <a href="http://www.google.com/chrome">Google Chrome</a>.</p></div>');
         return;
@@ -962,56 +1223,51 @@ $(document).ready(function() {
     // ===================
     // Status Socket
     // ===================
-    
-    ws_status.onopen = function() {
+
+    ws_status.onopen = function () {
         console.log("Status Socket connected");
     };
 
-    ws_status.onclose = function() {
+    ws_status.onclose = function () {
         showAlert('error', 'Status WebSocket disconnected');
     };
 
-    ws_status.onmessage = function(e) {
+    ws_status.onmessage = function (e) {
         var x = JSON.parse(e.data);
-        
+
         if (x.type == "backlog") {
             if (x.profile) {
                 selected_profile_name = x.profile.name;
-                
-                $.each(profiles, function(i, v) {
-                    if (v.name == x.profile.name) {
-                        selected_profile = i;
-                        $('#sel_prof').html(v.name);
-                        renderProfileList();
-                    }
-                });
-                
-                if (x.log && x.log.length > 0) {
-                    var firstLogTemp = x.log[0].temperature;
-                    run_actual_start_temp = firstLogTemp;
-                    profile_adjusted_for_run = true;
-                    adjustProfileForActualStartTemp(firstLogTemp);
-                } else if (x.profile.data && x.profile.data.length > 0) {
-                    graph.profile.data = x.profile.data;
-                }
-            }
+                // If there's backlog with a profile, a firing is in progress
+                firing_profile_name = x.profile.name;
 
-            $.each(x.log, function(i, v) {
-                var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
-                graph.live.data.push([xTime, v.temperature]);
+                // Check if profiles are loaded yet
+                if (profiles.length === 0) {
+                    // Store backlog for processing after profiles load
+                    pending_backlog = x;
+                } else {
+                    // Profiles already loaded, process backlog immediately
+                    processBacklog(x);
+                }
+            } else {
+                // No profile in backlog, just process log entries if any
+                $.each(x.log, function (i, v) {
+                    var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
+                    graph.live.data.push([xTime, v.temperature]);
+                });
                 graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-            });
+            }
         }
 
         if (state != "EDIT") {
             state = x.state;
-            
+
             if (state != state_last) {
                 if (state == "RUNNING" && state_last != "RUNNING" && state_last != "PAUSED") {
                     run_actual_start_temp = x.temperature;
                     profile_adjusted_for_run = false;
                 }
-                
+
                 if (state_last == "RUNNING" && state != "PAUSED") {
                     $('#target_temp').html('---');
                     $('#graph-target').html('---');
@@ -1022,23 +1278,10 @@ $(document).ready(function() {
                     showAlert('success', 'Run completed');
                     setTimeout(fetchLastFiring, 1000);
                     resetProfileToDefault();
+                    // Clear firing profile highlight
+                    firing_profile_name = null;
+                    renderProfileList();
                 }
-            }
-
-            // Update state display
-            var stateText = state;
-            if (x.cooling_estimate && state !== 'RUNNING') {
-                if (x.cooling_estimate !== 'Ready' && x.cooling_estimate !== 'Calculating...') {
-                    stateText = state + ' - ' + x.cooling_estimate + ' to 100°F';
-                }
-            }
-            $('#state').text(stateText);
-            
-            // Add running class for styling
-            if (state === 'RUNNING') {
-                $('#state').addClass('running');
-            } else {
-                $('#state').removeClass('running');
             }
 
             if (state == "RUNNING") {
@@ -1074,7 +1317,7 @@ $(document).ready(function() {
                     $('#eta-time').text(eta);
                     updateProgress(parseFloat(x.runtime) / parseFloat(x.totaltime) * 100);
                 }
-                
+
                 $('#target_temp').html(parseInt(x.target));
                 $('#graph-target').html(parseInt(x.target) + '°' + temp_scale_display);
                 $('#cost').html(parseFloat(x.cost).toFixed(2));
@@ -1082,12 +1325,12 @@ $(document).ready(function() {
                 $("#btn_start").show();
                 $("#btn_stop").hide();
                 $('#eta-display').hide();
-                
+
                 var actualRate = clampRate(parseInt(x.heat_rate) || 0);
                 $('#heat_rate_actual').html(actualRate);
                 $('#heat_rate_set').html('---');
                 $('#elapsed_time').html('--:--:--');
-                
+
                 if (state == "IDLE" && last_firing_data) {
                     displayLastFiring(last_firing_data);
                 }
@@ -1096,7 +1339,24 @@ $(document).ready(function() {
             // Update displays
             $('#act_temp').html(parseInt(x.temperature));
             $('#graph-current').html(parseInt(x.temperature) + '°' + temp_scale_display);
-            
+
+            // Handle simulation mode - show editable input
+            if (x.simulate && !is_sim_mode) {
+                is_sim_mode = true;
+                $('#act_temp').hide();
+                $('#act_temp_input').show().val(parseInt(x.temperature));
+                // Add sim mode indicator to sensor card
+                $('[data-metric="sensor"]').addClass('sim-mode');
+            } else if (!x.simulate && is_sim_mode) {
+                is_sim_mode = false;
+                $('#act_temp').show();
+                $('#act_temp_input').hide();
+                $('[data-metric="sensor"]').removeClass('sim-mode');
+            } else if (is_sim_mode && !$('#act_temp_input').is(':focus')) {
+                // Update input value only if not focused (user editing)
+                $('#act_temp_input').val(parseInt(x.temperature));
+            }
+
             // Update graph remaining time
             if (state === 'RUNNING') {
                 var remaining = (typeof x.eta_seconds !== 'undefined') ? x.eta_seconds : (x.totaltime - x.runtime);
@@ -1105,18 +1365,14 @@ $(document).ready(function() {
                 $('#graph-remaining').html('--:--:--');
             }
 
-            // LED indicators - using new class names
-            if (x.cool > 0.5) { $('#cool').addClass("led-cool-active"); } else { $('#cool').removeClass("led-cool-active"); }
-            if (x.air > 0.5) { $('#air').addClass("led-air-active"); } else { $('#air').removeClass("led-air-active"); }
-            if (x.temperature > hazardTemp()) { $('#hazard').addClass("led-hazard-active"); } else { $('#hazard').removeClass("led-hazard-active"); }
-            if ((x.door == "OPEN") || (x.door == "UNKNOWN")) { $('#door').addClass("led-door-open"); } else { $('#door').removeClass("led-door-open"); }
-            
-            // Heat LED with bar indicator
-            if (typeof x.pidstats !== 'undefined' && x.pidstats.out > 0) {
-                $('#heat').addClass("led-heat-active");
-            } else {
-                $('#heat').removeClass("led-heat-active");
-            }
+            // Heat glow effect on sensor card
+            var isHeating = (typeof x.pidstats !== 'undefined' && x.pidstats.out > 0);
+            updateHeatGlow(isHeating);
+
+            // Alert indicator for high temperature warning
+            var isHighTemp = x.temperature > hazardTemp();
+            var alertMessage = isHighTemp ? 'HIGH TEMPERATURE WARNING - ' + parseInt(x.temperature) + '°' + temp_scale_display : '';
+            updateAlertIndicator(isHighTemp, alertMessage);
 
             state_last = state;
         }
@@ -1125,12 +1381,12 @@ $(document).ready(function() {
     // ===================
     // Config Socket
     // ===================
-    
-    ws_config.onopen = function() {
+
+    ws_config.onopen = function () {
         ws_config.send('GET');
     };
 
-    ws_config.onmessage = function(e) {
+    ws_config.onmessage = function (e) {
         var x = JSON.parse(e.data);
         temp_scale = x.temp_scale;
         time_scale_slope = x.time_scale_slope;
@@ -1156,10 +1412,10 @@ $(document).ready(function() {
     // ===================
     // Control Socket
     // ===================
-    
-    ws_control.onopen = function() {};
 
-    ws_control.onmessage = function(e) {
+    ws_control.onopen = function () { };
+
+    ws_control.onmessage = function (e) {
         var x = JSON.parse(e.data);
         var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
         graph.live.data.push([xTime, x.temperature]);
@@ -1169,12 +1425,12 @@ $(document).ready(function() {
     // ===================
     // Storage Socket
     // ===================
-    
-    ws_storage.onopen = function() {
+
+    ws_storage.onopen = function () {
         ws_storage.send('GET');
     };
 
-    ws_storage.onmessage = function(e) {
+    ws_storage.onmessage = function (e) {
         var message = JSON.parse(e.data);
 
         if (message.resp) {
@@ -1188,8 +1444,8 @@ $(document).ready(function() {
         }
 
         profiles = message;
-        
-        var valid_profile_names = profiles.map(function(a) { return a.name; });
+
+        var valid_profile_names = profiles.map(function (a) { return a.name; });
         if (valid_profile_names.length > 0 && $.inArray(selected_profile_name, valid_profile_names) === -1) {
             selected_profile = 0;
             selected_profile_name = valid_profile_names[0];
@@ -1203,80 +1459,117 @@ $(document).ready(function() {
                 break;
             }
         }
-        
+
         renderProfileList();
+        
+        // Process any pending backlog that was deferred while waiting for profiles to load
+        if (pending_backlog !== null) {
+            processBacklog(pending_backlog);
+            pending_backlog = null;
+        }
     };
 
     // ===================
     // UI Event Handlers
     // ===================
-    
+
     // Start button - show confirmation
-    $('#btn_start').on('click', function() {
+    $('#btn_start').on('click', function () {
         showConfirmation();
     });
-    
+
     // Confirmation actions
-    $('#confirm-yes').on('click', function() {
+    $('#confirm-yes').on('click', function () {
         runTask();
     });
-    
-    $('#confirm-no').on('click', function() {
+
+    $('#confirm-no').on('click', function () {
         hideConfirmation();
     });
-    
+
     // Stop button
-    $('#btn_stop').on('click', function() {
+    $('#btn_stop').on('click', function () {
         abortTask();
     });
-    
+
     // Edit button
-    $('#btn_edit').on('click', function() {
+    $('#btn_edit').on('click', function () {
         enterEditMode();
     });
-    
+
     // New profile button
-    $('#btn_new').on('click', function() {
+    $('#btn_new').on('click', function () {
         enterNewMode();
     });
-    
+
     // Edit panel buttons
-    $('#btn_save').on('click', function() {
+    $('#btn_save').on('click', function () {
         saveProfile();
     });
-    
-    $('#btn_exit').on('click', function() {
+
+    $('#btn_exit').on('click', function () {
         leaveEditMode();
     });
-    
-    $('#btn_delProfile').on('click', function() {
+
+    $('#btn_delProfile').on('click', function () {
         if (confirm('Delete this profile? This cannot be undone.')) {
             deleteProfile();
         }
     });
-    
-    $('#btn_newPoint').on('click', function() {
+
+    $('#btn_newPoint').on('click', function () {
         newPoint();
     });
-    
-    $('#btn_delPoint').on('click', function() {
+
+    $('#btn_delPoint').on('click', function () {
         delPoint();
     });
-    
-    $('#btn_table').on('click', function() {
+
+    $('#btn_table').on('click', function () {
         toggleTable();
     });
-    
+
     // Last firing toggle
-    $('#toggle-last-firing').on('click', function() {
+    $('#toggle-last-firing').on('click', function () {
         var $panel = $('#last_firing_panel');
         $panel.toggleClass('collapsed');
         localStorage.setItem('lastFiringCollapsed', $panel.hasClass('collapsed'));
     });
 
+    // Simulated temperature input handler
+    $('#act_temp_input').on('change', function () {
+        var newTemp = parseFloat($(this).val());
+        if (isNaN(newTemp)) return;
+
+        $.ajax({
+            url: '/api',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                cmd: 'set_sim_temp',
+                temperature: newTemp
+            }),
+            success: function (response) {
+                console.log('Simulated temperature set to:', newTemp);
+            },
+            error: function (xhr, status, error) {
+                console.error('Failed to set simulated temperature:', error);
+            }
+        });
+    });
+
     // Fetch last firing data on load
     fetchLastFiring();
-    
+
     // Initialize graph
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    // Re-check profile name truncation on window resize
+    var resizeTimer;
+    $(window).on('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            updateProfileTruncation();
+        }, 150);
+    });
 });

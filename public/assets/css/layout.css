@@ -4,7 +4,9 @@
  */
 
 /* Reset & Base */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
@@ -24,55 +26,21 @@ body.kiln-dashboard {
   line-height: 1.4;
 }
 
-/* Status Header */
-.status-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: var(--bg-header);
-  border: 1px solid var(--border-widget);
-  border-radius: var(--widget-radius);
-  padding: var(--spacing-sm) var(--spacing-md);
-  margin-bottom: var(--spacing-lg);
-  box-shadow: var(--shadow-widget);
-}
-
-.status-leds {
-  display: flex;
-  gap: var(--spacing-sm);
-}
-
-.status-state {
-  font-family: var(--font-ui);
-  font-size: var(--text-lg);
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.status-state.running {
-  color: var(--accent-primary);
-}
-
-.edit-indicator {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--accent-primary);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: var(--spacing-xs) var(--spacing-sm);
-  background: rgba(230, 126, 34, 0.15);
-  border-radius: var(--btn-radius-sm);
-}
-
 /* Main Dashboard Grid */
 .dashboard-grid {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: auto;
+  align-items: start;
   gap: var(--spacing-lg);
   max-width: 1600px;
   margin: 0 auto;
+}
+
+/* Make profiles and graph widgets the same height */
+.widget-profiles,
+.widget-graph {
+  grid-row: 1;
 }
 
 /* Widget Base */
@@ -99,13 +67,16 @@ body.kiln-dashboard {
 .widget-profiles {
   display: flex;
   flex-direction: column;
+  /* Match graph widget height: graph(280px) + graph-area padding(32px) + stats(~80px) + title(~48px) */
+  max-height: 440px;
 }
 
 .widget-profiles .widget-content {
   flex: 1;
   padding: var(--spacing-md);
   overflow-y: auto;
-  max-height: 500px;
+  min-height: 0;
+  /* Allow flex child to shrink below content size */
 }
 
 /* Widget: Graph */
@@ -198,12 +169,30 @@ body.kiln-dashboard {
 /* Large tablets / small desktops */
 @media (max-width: 1199px) {
   .dashboard-grid {
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 1fr 1fr;
     grid-template-rows: auto auto;
+    justify-items: stretch;
+    align-items: start;
   }
-  
-  .widget-insights {
+
+  /* Graph takes full width on top row */
+  .widget-graph {
     grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  /* Profiles and Insights side by side on bottom row */
+  .widget-profiles {
+    grid-column: 1;
+    grid-row: 2;
+    max-height: 350px;
+  }
+
+  .widget-insights {
+    grid-column: 2;
+    grid-row: 2;
   }
 }
 
@@ -212,18 +201,34 @@ body.kiln-dashboard {
   body.kiln-dashboard {
     padding: var(--spacing-sm);
   }
-  
+
   .dashboard-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(180px, 1fr) minmax(200px, 2fr);
+    grid-template-rows: auto auto;
     gap: var(--spacing-md);
   }
-  
-  .widget-profiles,
-  .widget-graph,
-  .widget-insights {
-    grid-column: 1;
+
+  /* Graph spans full width on top */
+  .widget-graph {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
   }
-  
+
+  /* Profiles on left, below graph, vertically scrollable */
+  .widget-profiles {
+    grid-column: 1;
+    grid-row: 2;
+    max-height: 400px;
+    min-height: 200px;
+  }
+
+  /* Insights on right, below graph */
+  .widget-insights {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
   .status-header {
     flex-wrap: wrap;
     gap: var(--spacing-sm);
@@ -235,16 +240,16 @@ body.kiln-dashboard {
   body.kiln-dashboard {
     padding: var(--spacing-xs);
   }
-  
+
   .dashboard-grid {
     gap: var(--spacing-sm);
   }
-  
+
   .status-header {
     padding: var(--spacing-sm);
     border-radius: var(--widget-radius-sm);
   }
-  
+
   .widget {
     border-radius: var(--widget-radius-sm);
   }

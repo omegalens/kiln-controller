@@ -122,7 +122,8 @@ class TempSensorSimulated(TempSensor):
     '''Simulates a temperature sensor '''
     def __init__(self):
         TempSensor.__init__(self)
-        self.simulated_temperature = config.sim_t_env
+        # Use sim_initial_temp for starting temperature (allows testing pre-heated kiln)
+        self.simulated_temperature = getattr(config, 'sim_initial_temp', config.sim_t_env)
     def temperature(self):
         return self.simulated_temperature
 
@@ -398,21 +399,38 @@ class Oven(threading.Thread):
 
     def set_heat_rate(self,runtime,temp):
         '''heat rate is the heating rate in degrees/hour
+        Uses a hybrid approach: keeps minimum samples OR time window, whichever retains more data.
+        This ensures rate calculation works with both fast updates and high speedup factors.
         '''
-        # arbitrary number of samples
-        # the time this covers changes based on a few things
-        numtemps = 60
-        self.heat_rate_temps.append((runtime,temp))
-         
-        # drop old temps off the list
-        if len(self.heat_rate_temps) > numtemps:
-            self.heat_rate_temps = self.heat_rate_temps[-1*numtemps:]
-        time2 = self.heat_rate_temps[-1][0]
-        time1 = self.heat_rate_temps[0][0]
-        temp2 = self.heat_rate_temps[-1][1]
-        temp1 = self.heat_rate_temps[0][1]
-        if time2 > time1:
-            self.heat_rate = ((temp2 - temp1) / (time2 - time1))*3600
+        # Minimum samples to keep (ensures we have enough data points)
+        min_samples = 10
+        # Time window in seconds (default 5 minutes of simulated time)
+        rate_window_seconds = getattr(config, 'heat_rate_window_seconds', 300)
+        
+        self.heat_rate_temps.append((runtime, temp))
+        
+        # Remove samples older than the time window, but always keep at least min_samples
+        if len(self.heat_rate_temps) > min_samples:
+            cutoff_time = runtime - rate_window_seconds
+            # Filter by time, but don't go below min_samples
+            filtered = [(t, tp) for t, tp in self.heat_rate_temps if t >= cutoff_time]
+            if len(filtered) >= min_samples:
+                self.heat_rate_temps = filtered
+            else:
+                # Keep the most recent min_samples
+                self.heat_rate_temps = self.heat_rate_temps[-min_samples:]
+        
+        # Cap at 1000 samples to prevent memory issues
+        if len(self.heat_rate_temps) > 1000:
+            self.heat_rate_temps = self.heat_rate_temps[-1000:]
+        
+        if len(self.heat_rate_temps) >= 2:
+            time2 = self.heat_rate_temps[-1][0]
+            time1 = self.heat_rate_temps[0][0]
+            temp2 = self.heat_rate_temps[-1][1]
+            temp1 = self.heat_rate_temps[0][1]
+            if time2 > time1:
+                self.heat_rate = ((temp2 - temp1) / (time2 - time1))*3600
 
     def run_profile(self, profile, startat=0, allow_seek=True):
         log.debug('run_profile run on thread' + threading.current_thread().name)
@@ -1148,6 +1166,7 @@ class Oven(threading.Thread):
             'catching_up': self.catching_up,
             'door': 'CLOSED',
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
+            'simulate': config.simulate,
         }
         
         # Add segment-based fields when using v2 control
@@ -1488,8 +1507,9 @@ class SimulatedOven(Oven):
         self.R_ho = self.R_ho_noair
         self.speedup_factor = config.sim_speedup_factor
 
-        # set temps to the temp of the surrounding environment
-        self.t = config.sim_t_env  # deg C or F temp of oven
+        # set temps: oven starts at initial temp, heating element at environment temp
+        # Use sim_initial_temp for oven, sim_t_env for heating element (allows testing pre-heated kiln)
+        self.t = getattr(config, 'sim_initial_temp', config.sim_t_env)  # deg C or F temp of oven
         self.t_h = self.t_env #deg C temp of heating element
 
         super().__init__()
@@ -1662,6 +1682,18 @@ class SimulatedOven(Oven):
                                self.board.temp_sensor.temperature() +
                                config.thermocouple_offset, now_simulator)
 
+        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+        # If kiln is at or above target, don't heat - let it cool naturally
+        cooling_override = False
+        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+        if getattr(self, 'target_heat_rate', 0) and isinstance(self.target_heat_rate, (int, float)):
+            if self.target_heat_rate < 0 and current_temp >= self.target:
+                # Kiln is at or above target during cooling - no heat needed
+                pid = 0
+                self.pid.iterm = 0  # Reset integral to prevent buildup
+                self.pid.pidstats['out'] = 0  # Update pidstats so frontend shows heat off
+                cooling_override = True
+
         heat_on = float(self.time_step * pid)
         heat_off = float(self.time_step * (1 - pid))
 
@@ -1724,6 +1756,18 @@ class RealOven(Oven):
         pid = self.pid.compute(self.target,
                                self.board.temp_sensor.temperature() +
                                config.thermocouple_offset, datetime.datetime.now())
+
+        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+        # If kiln is at or above target, don't heat - let it cool naturally
+        cooling_override = False
+        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+        if getattr(self, 'target_heat_rate', 0) and isinstance(self.target_heat_rate, (int, float)):
+            if self.target_heat_rate < 0 and current_temp >= self.target:
+                # Kiln is at or above target during cooling - no heat needed
+                pid = 0
+                self.pid.iterm = 0  # Reset integral to prevent buildup
+                self.pid.pidstats['out'] = 0  # Update pidstats so frontend shows heat off
+                cooling_override = True
 
         heat_on = float(self.time_step * pid)
         heat_off = float(self.time_step * (1 - pid))
@@ -2170,8 +2214,11 @@ class PID():
         if error < (-1 * config.pid_control_window):
             log.info("kiln outside pid control window, max cooling")
             output = 0
-            # it is possible to set self.iterm=0 here and also below
-            # but I dont think its needed
+            # Reset integral term when significantly above target (cooling mode)
+            # This prevents the accumulated heating integral from causing unwanted heat output
+            if self.iterm > 0:
+                log.info("Resetting positive integral term during cooling: %.2f -> 0" % self.iterm)
+                self.iterm = 0
         elif error > (1 * config.pid_control_window):
             log.info("kiln outside pid control window, max heating")
             output = 1
@@ -2204,6 +2251,20 @@ class PID():
             else:
                 # Output is saturated, don't accumulate more integral
                 log.debug("PID output saturated at %.2f, preventing integral windup" % output)
+            
+            # Integral decay during cooling: When error is negative (above target),
+            # decay the positive integral term to allow proper cooling
+            if error < 0 and self.iterm > 0:
+                # Decay integral proportionally to how far above target we are
+                decay_rate = getattr(config, 'pid_integral_decay_rate', 0.1)
+                decay_amount = abs(error) * decay_rate * timeDelta
+                old_iterm = self.iterm
+                self.iterm = max(0, self.iterm - decay_amount)
+                if old_iterm != self.iterm:
+                    log.debug("Decaying integral during cooling: %.2f -> %.2f" % (old_iterm, self.iterm))
+                # Recalculate output with decayed integral
+                output_unclamped = p_term + self.iterm + d_term
+                output = sorted([-1 * window_size, output_unclamped, window_size])[1]
             
             out4logs = output
             output = float(output / window_size)
