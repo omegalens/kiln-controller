@@ -333,16 +333,8 @@ function updateProfileTable() {
     }
 
     html += '</table></div>';
-    html += '<button class="btn btn-secondary mt-md" id="toggle_v2_editor">Switch to Rate Editor</button>';
 
     $('#profile_table').html(html);
-
-    $('#toggle_v2_editor').click(function () {
-        use_v2_editor = true;
-        profile_segments = legacyToSegments(graph.profile.data);
-        profile_start_temp = graph.profile.data && graph.profile.data.length > 0 ? graph.profile.data[0][1] : 65;
-        updateProfileTable_v2();
-    });
 
     $(".form-input").change(function (e) {
         var id = $(this)[0].id;
@@ -565,7 +557,6 @@ function updateProfileTable_v2() {
     html += '</table></div>';
     html += '<div class="flex gap-sm mt-md">';
     html += '<button class="btn btn-success" id="add_segment">+ Segment</button>';
-    html += '<button class="btn btn-secondary" id="toggle_v1_editor">Point Editor</button>';
     html += '</div>';
 
     $('#profile_table').html(html);
@@ -617,12 +608,6 @@ function bindSegmentEvents() {
         });
         updateGraphFromSegments();
         updateProfileTable_v2();
-    });
-
-    $('#toggle_v1_editor').click(function () {
-        use_v2_editor = false;
-        graph.profile.data = segmentsToLegacy(profile_start_temp, profile_segments);
-        updateProfileTable();
     });
 }
 
@@ -911,7 +896,6 @@ function hideConfirmation() {
 // =============================================================================
 
 function enterNewMode() {
-    use_v2_editor = true;
     state = "EDIT";
 
     $('#btn_controls').hide();
@@ -944,12 +928,7 @@ function enterEditMode() {
     var profile = profiles[selected_profile];
     loadProfileForEditing(profile);
 
-    if (use_v2_editor) {
-        updateProfileTable_v2();
-    } else {
-        updateProfileTable();
-    }
-    $('#profile_table').slideDown();
+    updateProfileTable_v2();
 }
 
 function leaveEditMode() {
@@ -966,30 +945,6 @@ function leaveEditMode() {
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 }
 
-function newPoint() {
-    if (graph.profile.data.length > 0) {
-        var pointx = parseInt(graph.profile.data[graph.profile.data.length - 1][0]) + 15;
-    } else {
-        var pointx = 0;
-    }
-    graph.profile.data.push([pointx, Math.floor((Math.random() * 230) + 25)]);
-    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    updateProfileTable();
-}
-
-function delPoint() {
-    graph.profile.data.splice(-1, 1);
-    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    updateProfileTable();
-}
-
-function toggleTable() {
-    if ($('#profile_table').css('display') == 'none') {
-        $('#profile_table').slideDown();
-    } else {
-        $('#profile_table').slideUp();
-    }
-}
 
 function deleteProfile() {
     var profile = { "type": "profile", "data": "", "name": selected_profile_name };
@@ -1012,56 +967,41 @@ function saveProfile() {
         return false;
     }
 
-    var profile;
-
-    if (use_v2_editor && profile_segments.length > 0) {
-        var valid = true;
-        var current_temp = profile_start_temp;
-
-        for (var i = 0; i < profile_segments.length; i++) {
-            var seg = profile_segments[i];
-            if (typeof seg.rate === 'number' && seg.rate !== 0) {
-                if (seg.rate > 0 && seg.target < current_temp) {
-                    valid = false;
-                    showAlert('error', 'Segment ' + (i + 1) + ': Positive rate with decreasing target');
-                    break;
-                }
-                if (seg.rate < 0 && seg.target > current_temp) {
-                    valid = false;
-                    showAlert('error', 'Segment ' + (i + 1) + ': Negative rate with increasing target');
-                    break;
-                }
-            }
-            current_temp = seg.target;
-        }
-
-        if (!valid) return false;
-
-        profile = {
-            "type": "profile",
-            "version": 2,
-            "name": name,
-            "start_temp": profile_start_temp,
-            "temp_units": temp_scale,
-            "segments": profile_segments
-        };
-    } else {
-        var rawdata = graph.plot.getData()[0].data;
-        var data = [];
-        var last = -1;
-
-        for (var i = 0; i < rawdata.length; i++) {
-            if (rawdata[i][0] > last) {
-                data.push([rawdata[i][0], rawdata[i][1]]);
-            } else {
-                showAlert('error', 'Time points must be in ascending order');
-                return false;
-            }
-            last = rawdata[i][0];
-        }
-
-        profile = { "type": "profile", "data": data, "name": name };
+    if (profile_segments.length === 0) {
+        showAlert('error', 'Please add at least one segment to the profile');
+        return false;
     }
+
+    var valid = true;
+    var current_temp = profile_start_temp;
+
+    for (var i = 0; i < profile_segments.length; i++) {
+        var seg = profile_segments[i];
+        if (typeof seg.rate === 'number' && seg.rate !== 0) {
+            if (seg.rate > 0 && seg.target < current_temp) {
+                valid = false;
+                showAlert('error', 'Segment ' + (i + 1) + ': Positive rate with decreasing target');
+                break;
+            }
+            if (seg.rate < 0 && seg.target > current_temp) {
+                valid = false;
+                showAlert('error', 'Segment ' + (i + 1) + ': Negative rate with increasing target');
+                break;
+            }
+        }
+        current_temp = seg.target;
+    }
+
+    if (!valid) return false;
+
+    var profile = {
+        "type": "profile",
+        "version": 2,
+        "name": name,
+        "start_temp": profile_start_temp,
+        "temp_units": temp_scale,
+        "segments": profile_segments
+    };
 
     var put = { "cmd": "PUT", "profile": profile };
     var put_cmd = JSON.stringify(put);
@@ -1676,18 +1616,6 @@ $(document).ready(function () {
         if (confirm('Delete this profile? This cannot be undone.')) {
             deleteProfile();
         }
-    });
-
-    $('#btn_newPoint').on('click', function () {
-        newPoint();
-    });
-
-    $('#btn_delPoint').on('click', function () {
-        delPoint();
-    });
-
-    $('#btn_table').on('click', function () {
-        toggleTable();
     });
 
     // Gallery card click (ignore if clicking delete or pin button)
