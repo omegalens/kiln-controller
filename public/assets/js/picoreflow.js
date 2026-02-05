@@ -181,7 +181,7 @@ function renderProfileList() {
     for (var i = 0; i < profiles.length; i++) {
         sortedIndices.push(i);
     }
-    sortedIndices.sort(function(a, b) {
+    sortedIndices.sort(function (a, b) {
         return getProfilePeakTemp(profiles[b]) - getProfilePeakTemp(profiles[a]);
     });
 
@@ -224,18 +224,18 @@ function renderProfileList() {
  * Also calculates the marquee scroll distance for the animation
  */
 function updateProfileTruncation() {
-    $('.profile-item').each(function() {
+    $('.profile-item').each(function () {
         var $item = $(this);
         var $name = $item.find('.profile-name');
         var $nameText = $item.find('.profile-name-text');
-        
+
         // Temporarily remove truncated class to measure true width
         $item.removeClass('truncated');
-        
+
         // Get the container width and text width
         var containerWidth = $name.width();
         var textWidth = $nameText[0].scrollWidth;
-        
+
         if (textWidth > containerWidth) {
             $item.addClass('truncated');
             // Calculate scroll distance (negative because we scroll left)
@@ -479,7 +479,7 @@ function adjustProfileForActualStartTemp(actualTemp) {
 function resetProfileToDefault() {
     run_actual_start_temp = null;
     profile_adjusted_for_run = false;
-    
+
     if (profiles[selected_profile]) {
         updateProfile(selected_profile);
     }
@@ -488,7 +488,7 @@ function resetProfileToDefault() {
 // Process backlog data after profiles are loaded
 function processBacklog(backlogData) {
     var x = backlogData;
-    
+
     $.each(profiles, function (i, v) {
         if (v.name == x.profile.name) {
             selected_profile = i;
@@ -505,7 +505,7 @@ function processBacklog(backlogData) {
     } else if (x.profile.data && x.profile.data.length > 0) {
         graph.profile.data = x.profile.data;
     }
-    
+
     // Process log entries
     $.each(x.log, function (i, v) {
         var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
@@ -685,13 +685,13 @@ function hazardTemp() {
 
 function updateHeatGlow(isHeating) {
     var $sensorCard = $('[data-metric="sensor"]');
-    
+
     // Set target intensity based on heating state
     var newHeatState = isHeating;
-    
+
     if (newHeatState !== heat_on) {
         heat_on = newHeatState;
-        
+
         // Instantly toggle the border/background
         if (heat_on) {
             $sensorCard.addClass('heat-active');
@@ -701,7 +701,7 @@ function updateHeatGlow(isHeating) {
             glow_target = 0;
         }
     }
-    
+
     // Start glow animation if not already running
     if (glow_animation_frame === null) {
         animateGlow();
@@ -710,22 +710,22 @@ function updateHeatGlow(isHeating) {
 
 function animateGlow() {
     var $sensorCard = $('[data-metric="sensor"]');
-    
+
     // Smoothly interpolate glow_intensity toward glow_target
     var diff = glow_target - glow_intensity;
-    
+
     if (Math.abs(diff) > 0.002) {
         // Very slow rates - heat up slowly, cool down even slower (like real kiln coils)
         // These rates are per animation frame (~16ms), so multiply by 60 for per-second rate
         var rate = diff > 0 ? 0.008 : 0.004;
         glow_intensity += diff * rate;
-        
+
         // Clamp to valid range
         glow_intensity = Math.max(0, Math.min(1, glow_intensity));
-        
+
         // Apply smooth glow via inline box-shadow
         applyGlowSmooth($sensorCard, glow_intensity);
-        
+
         // Continue animation
         glow_animation_frame = requestAnimationFrame(animateGlow);
     } else {
@@ -743,37 +743,37 @@ function applyGlowSmooth($card, intensity) {
         $card.css('box-shadow', 'none');
         return;
     }
-    
+
     // Outer glow parameters (scaled by intensity)
     var outerBlur = Math.round(intensity * 25);      // 0-25px blur
     var outerSpread = Math.round(intensity * 8);     // 0-8px spread
     var outerOpacity = (intensity * 0.6).toFixed(2); // 0-0.6 opacity
-    
+
     // Secondary outer glow (orange, larger)
     var outer2Blur = Math.round(intensity * 40);     // 0-40px
     var outer2Spread = Math.round(intensity * 12);   // 0-12px
     var outer2Opacity = (intensity * 0.35).toFixed(2);
-    
+
     // Inner glow
     var innerBlur = Math.round(intensity * 20);      // 0-20px
     var innerOpacity = (intensity * 0.25).toFixed(2);
-    
-    var boxShadow = 
+
+    var boxShadow =
         '0 0 ' + outerBlur + 'px ' + outerSpread + 'px rgba(231, 76, 60, ' + outerOpacity + '), ' +
         '0 0 ' + outer2Blur + 'px ' + outer2Spread + 'px rgba(230, 126, 34, ' + outer2Opacity + '), ' +
         'inset 0 0 ' + innerBlur + 'px rgba(231, 76, 60, ' + innerOpacity + ')';
-    
+
     $card.css('box-shadow', boxShadow);
 }
 
 // Test function - call from browser console: testGlow(true) or testGlow(false)
-window.testGlow = function(on) {
+window.testGlow = function (on) {
     console.log('Testing glow:', on);
     updateHeatGlow(on);
 };
 
 // Instantly set glow to a specific level for testing: testGlowLevel(0.5)
-window.testGlowLevel = function(level) {
+window.testGlowLevel = function (level) {
     var $sensorCard = $('[data-metric="sensor"]');
     if (level > 0) {
         $sensorCard.addClass('heat-active');
@@ -794,12 +794,12 @@ function updateAlertIndicator(isActive, message) {
     var $indicator = $('#alert-indicator');
     var $messageBox = $('#alert-message-box');
     var $messageText = $('#alert-message-text');
-    
+
     if (isActive && !alert_active) {
         // Activate alert
         alert_active = true;
         $indicator.addClass('active');
-        
+
         if (message) {
             alert_message = message;
             $messageText.text(message);
@@ -823,7 +823,7 @@ function showAlertMessage(message) {
     var $indicator = $('#alert-indicator');
     var $messageBox = $('#alert-message-box');
     var $messageText = $('#alert-message-text');
-    
+
     alert_active = true;
     alert_message = message;
     $indicator.addClass('active');
@@ -834,7 +834,7 @@ function showAlertMessage(message) {
 function hideAlertMessage() {
     var $indicator = $('#alert-indicator');
     var $messageBox = $('#alert-message-box');
-    
+
     alert_active = false;
     alert_message = '';
     $indicator.removeClass('active flashing');
@@ -1140,74 +1140,235 @@ function getOptions() {
 }
 
 // =============================================================================
-// Last Firing Results
+// Firing Gallery
 // =============================================================================
 
-function fetchLastFiring() {
+var gallery_offset = 0;
+var gallery_limit = 7;
+var gallery_has_more = false;
+var selected_historical = null;
+var pinned_logs = [];
+
+function fetchFiringGallery(loadMore) {
+    if (!loadMore) {
+        gallery_offset = 0;
+    }
+
+    // First fetch pinned logs, then fetch gallery
     $.ajax({
-        url: '/api/last_firing',
+        url: '/api/pinned_logs',
         type: 'GET',
         dataType: 'json',
-        success: function (data) {
-            if (data && !data.error) {
-                last_firing_data = data;
-                displayLastFiring(data);
-            } else {
-                $('#last_firing_panel').hide();
-            }
+        success: function (pinnedData) {
+            pinned_logs = pinnedData.pinned || [];
+            fetchGalleryLogs(loadMore);
         },
         error: function () {
-            $('#last_firing_panel').hide();
+            pinned_logs = [];
+            fetchGalleryLogs(loadMore);
         }
     });
 }
 
-function displayLastFiring(data) {
-    if (!data || data.error) {
-        $('#last_firing_panel').hide();
-        return;
-    }
+function fetchGalleryLogs(loadMore) {
+    $.ajax({
+        url: '/api/firing_logs?limit=' + gallery_limit + '&offset=' + gallery_offset,
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+            if (data.error) {
+                $('#firing_gallery').hide();
+                return;
+            }
+            gallery_has_more = data.hasMore || false;
 
-    var duration_str = new Date(data.duration_seconds * 1000).toISOString().substr(11, 8);
-    var end_time = new Date(data.end_time);
-    var timestamp_str = end_time.toLocaleString();
+            // Sort logs: pinned first (in pinned order), then by date
+            var logs = data.logs || [];
+            var sortedLogs = sortLogsWithPinned(logs, pinned_logs);
 
-    var status_str = data.status || 'completed';
-    var status_class = 'completed';
-    var status_text = 'Completed';
+            renderGallery(sortedLogs, loadMore, gallery_has_more);
+            if ((logs.length > 0) || gallery_offset > 0) {
+                $('#firing_gallery').show();
+            } else {
+                $('#firing_gallery').hide();
+            }
+        },
+        error: function () {
+            $('#firing_gallery').hide();
+        }
+    });
+}
 
-    if (status_str === 'aborted') {
-        status_class = 'aborted';
-        status_text = 'Aborted';
-    } else if (status_str === 'emergency_stop') {
-        status_class = 'emergency';
-        status_text = 'Emergency Stop';
-    }
+function sortLogsWithPinned(logs, pinnedList) {
+    // Separate pinned and unpinned
+    var pinned = [];
+    var unpinned = [];
 
-    var status_html = '<span class="status-badge ' + status_class + '">' + status_text + '</span>';
+    logs.forEach(function (log) {
+        if (pinnedList.indexOf(log.filename) !== -1) {
+            pinned.push(log);
+        } else {
+            unpinned.push(log);
+        }
+    });
 
-    $('#last_firing_profile').text(data.profile_name || '-');
-    $('#last_firing_status').html(status_html);
-    $('#last_firing_duration').text(duration_str);
-    $('#last_firing_cost').text((data.currency_type || '$') + ' ' + (data.final_cost || 0).toFixed(2));
-    $('#last_firing_divergence').text((data.avg_divergence || 0).toFixed(2) + '°' + (data.temp_scale === 'f' ? 'F' : 'C'));
-    $('#last_firing_timestamp').text(timestamp_str);
+    // Sort pinned by their order in pinnedList
+    pinned.sort(function (a, b) {
+        return pinnedList.indexOf(a.filename) - pinnedList.indexOf(b.filename);
+    });
 
-    // Restore collapsed state from localStorage
-    var isCollapsed = localStorage.getItem('lastFiringCollapsed') === 'true';
-    if (isCollapsed) {
-        $('#last_firing_panel').addClass('collapsed');
+    // Unpinned are already sorted by date from server
+    return pinned.concat(unpinned);
+}
+
+function renderGallery(logs, append, hasMore) {
+    var $scroll = $('#gallery-scroll');
+    if (!append) {
+        $scroll.empty();
     } else {
-        $('#last_firing_panel').removeClass('collapsed');
+        // Remove existing load-more card before adding new items
+        $scroll.find('.gallery-card-load-more').remove();
     }
 
-    if (state === 'IDLE') {
-        $('#last_firing_panel').show();
+    var isRunning = (state === 'RUNNING');
+    var pinIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8"/><path d="M16 6V2H8v4"/><path d="M12 10v12"/><circle cx="12" cy="10" r="2"/></svg>';
+
+    logs.forEach(function (log) {
+        var date = new Date(log.end_time);
+        var dateStr = date.toLocaleDateString();
+        var duration = formatSecondsToHHMMSS(log.duration_seconds || 0);
+        var isPinned = pinned_logs.indexOf(log.filename) !== -1;
+
+        var trashIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+        var checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20,6 9,17 4,12"/></svg>';
+        var cardHtml = '<div class="gallery-card' + (isRunning ? ' disabled' : '') + (isPinned ? ' pinned' : '') +
+            '" data-filename="' + log.filename + '">' +
+            '<button class="gallery-card-pin' + (isPinned ? ' pinned' : '') + '">' + pinIcon + '</button>' +
+            '<div class="gallery-card-profile">' + (log.profile_name || '-') + '</div>' +
+            '<div class="gallery-card-date">' + dateStr + '</div>' +
+            '<div class="gallery-card-stats">' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Duration</span>' +
+            '<span class="gallery-card-stat-value">' + duration + '</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Cost</span>' +
+            '<span class="gallery-card-stat-value">' + (log.currency_type || '$') +
+            (log.final_cost || 0).toFixed(2) + '</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Divergence</span>' +
+            '<span class="gallery-card-stat-value">±' + (log.avg_divergence || 0).toFixed(1) + '°</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Status</span>' +
+            '<span class="gallery-card-stat-value">' + formatStatus(log.status) + '</span></div>' +
+            '</div>' +
+            '<button class="gallery-card-delete" data-trash-icon="' + encodeURIComponent(trashIcon) + '" data-check-icon="' + encodeURIComponent(checkIcon) + '">' + trashIcon + '</button>' +
+            '</div>';
+        $scroll.append(cardHtml);
+    });
+
+    // Add Load More card at the end if there are more results
+    if (hasMore) {
+        var loadMoreHtml = '<div class="gallery-card gallery-card-load-more">' +
+            '<div class="gallery-card-load-more-content">' +
+            '<span class="gallery-card-load-more-icon">+</span>' +
+            '<span class="gallery-card-load-more-text">Load More</span>' +
+            '</div></div>';
+        $scroll.append(loadMoreHtml);
     }
 }
 
-function hideLastFiring() {
-    $('#last_firing_panel').hide();
+function formatStatus(status) {
+    if (!status) return 'OK';
+    switch (status) {
+        case 'completed': return '✓';
+        case 'aborted': return '⊘';
+        case 'emergency_stop': return '⚠';
+        default: return status.charAt(0).toUpperCase();
+    }
+}
+
+function showHistoricalView(filename) {
+    $.ajax({
+        url: '/api/firing_log/' + encodeURIComponent(filename),
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+            if (data.error) {
+                console.error('Failed to load firing log:', data.error);
+                return;
+            }
+            selected_historical = data;
+
+            // Update overlay title
+            $('#historical-title').text('Historical: ' + (data.profile_name || 'Unknown'));
+
+            // Plot historical data on graph
+            var tempLog = data.temperature_log || [];
+            var histData = tempLog.map(function (p) {
+                return [p.runtime, p.temperature];
+            });
+            var targetData = tempLog.map(function (p) {
+                return [p.runtime, p.target];
+            });
+
+            // Create historical graph with distinct colors
+            var historicalProfile = {
+                data: targetData,
+                lines: { show: true, lineWidth: 2 },
+                dashes: { show: true, lineWidth: 2, dashLength: [6, 4] },
+                points: { show: false },
+                color: '#27ae60',
+                label: 'Target'
+            };
+            var historicalActual = {
+                data: histData,
+                lines: { show: true, lineWidth: 2, fill: true, fillColor: { colors: [{ opacity: 0.3 }, { opacity: 0.05 }] } },
+                points: { show: false },
+                color: '#3498db',
+                label: 'Actual'
+            };
+
+            graph.plot = $.plot("#graph_container", [historicalProfile, historicalActual], getOptions());
+
+            // Show overlay and add styling class
+            $('.graph-area').addClass('historical-mode');
+            $('#historical-overlay').show();
+
+            // Mark selected card
+            $('.gallery-card').removeClass('selected');
+            $('.gallery-card[data-filename="' + filename + '"]').addClass('selected');
+        },
+        error: function (xhr, status, error) {
+            console.error('Error fetching firing log:', error);
+        }
+    });
+}
+
+function closeHistoricalView() {
+    $('.graph-area').removeClass('historical-mode');
+    $('#historical-overlay').hide();
+    selected_historical = null;
+    $('.gallery-card').removeClass('selected');
+
+    // Restore live graph
+    if (selected_profile >= 0 && profiles[selected_profile]) {
+        updateProfile(selected_profile);
+    } else {
+        graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+    }
+}
+
+function updateGalleryDisabledState() {
+    if (state === 'RUNNING') {
+        $('.gallery-card').addClass('disabled');
+        // Close historical view if open while firing starts
+        if (selected_historical) {
+            closeHistoricalView();
+        }
+    } else {
+        $('.gallery-card').removeClass('disabled');
+    }
+}
+
+function resetDeleteButton($btn) {
+    var trashIcon = decodeURIComponent($btn.data('trash-icon'));
+    $btn.removeClass('confirm').html(trashIcon);
 }
 
 // =============================================================================
@@ -1276,7 +1437,7 @@ $(document).ready(function () {
                     $('#elapsed_time').html('--:--:--');
                     updateProgress(0);
                     showAlert('success', 'Run completed');
-                    setTimeout(fetchLastFiring, 1000);
+                    setTimeout(function () { fetchFiringGallery(false); }, 1000);
                     resetProfileToDefault();
                     // Clear firing profile highlight
                     firing_profile_name = null;
@@ -1288,7 +1449,7 @@ $(document).ready(function () {
                 $("#btn_start").hide();
                 $("#btn_stop").show();
                 $('#eta-display').show();
-                hideLastFiring();
+                updateGalleryDisabledState();
 
                 if (!profile_adjusted_for_run && run_actual_start_temp !== null) {
                     adjustProfileForActualStartTemp(run_actual_start_temp);
@@ -1461,7 +1622,7 @@ $(document).ready(function () {
         }
 
         renderProfileList();
-        
+
         // Process any pending backlog that was deferred while waiting for profiles to load
         if (pending_backlog !== null) {
             processBacklog(pending_backlog);
@@ -1529,11 +1690,125 @@ $(document).ready(function () {
         toggleTable();
     });
 
-    // Last firing toggle
-    $('#toggle-last-firing').on('click', function () {
-        var $panel = $('#last_firing_panel');
-        $panel.toggleClass('collapsed');
-        localStorage.setItem('lastFiringCollapsed', $panel.hasClass('collapsed'));
+    // Gallery card click (ignore if clicking delete or pin button)
+    $(document).on('click', '.gallery-card:not(.disabled):not(.gallery-card-load-more)', function (e) {
+        if ($(e.target).closest('.gallery-card-delete').length) return;
+        if ($(e.target).closest('.gallery-card-pin').length) return;
+        showHistoricalView($(this).data('filename'));
+    });
+
+    // Pin button click handler
+    $(document).on('click', '.gallery-card-pin', function (e) {
+        e.stopPropagation();
+        var $btn = $(this);
+        var $card = $btn.closest('.gallery-card');
+        var filename = $card.data('filename');
+        var isPinned = $btn.hasClass('pinned');
+
+        var method = isPinned ? 'DELETE' : 'POST';
+        var url = '/api/pinned_logs/' + encodeURIComponent(filename);
+
+        $.ajax({
+            url: url,
+            type: method,
+            dataType: 'json',
+            success: function (data) {
+                if (data.success) {
+                    // Update local state and UI immediately for responsiveness
+                    if (isPinned) {
+                        $btn.removeClass('pinned');
+                        $card.removeClass('pinned');
+                        // Remove from local pinned list
+                        var index = pinned_logs.indexOf(filename);
+                        if (index > -1) {
+                            pinned_logs.splice(index, 1);
+                        }
+                    } else {
+                        $btn.addClass('pinned');
+                        $card.addClass('pinned');
+                        // Add to local pinned list
+                        if (pinned_logs.indexOf(filename) === -1) {
+                            pinned_logs.unshift(filename);
+                        }
+                    }
+
+                    // Re-fetch gallery to sort correctly
+                    // We use a small timeout to let the visual toggle feedback be seen first
+                    setTimeout(function () {
+                        fetchFiringGallery(false);
+                    }, 300);
+                } else {
+                    showAlert('error', data.error || 'Failed to update pin state');
+                }
+            },
+            error: function () {
+                showAlert('error', 'Failed to update pin state');
+            }
+        });
+    });
+
+    // Delete button click handler
+    $(document).on('click', '.gallery-card-delete', function (e) {
+        e.stopPropagation();
+        var $btn = $(this);
+        var $card = $btn.closest('.gallery-card');
+        var filename = $card.data('filename');
+
+        if ($btn.hasClass('confirm')) {
+            // Second click - confirm deletion
+            $.ajax({
+                url: '/api/firing_log/' + encodeURIComponent(filename),
+                type: 'DELETE',
+                dataType: 'json',
+                success: function (data) {
+                    if (data.success) {
+                        // If this was the selected historical view, close it
+                        if ($card.hasClass('selected')) {
+                            closeHistoricalView();
+                        }
+                        // Remove the card with animation
+                        $card.fadeOut(200, function () {
+                            $(this).remove();
+                            // Refresh gallery if it becomes empty
+                            if ($('#gallery-scroll').children().length === 0) {
+                                fetchFiringGallery(false);
+                            }
+                        });
+                    } else {
+                        showAlert('error', data.error || 'Failed to delete firing log');
+                        resetDeleteButton($btn);
+                    }
+                },
+                error: function () {
+                    showAlert('error', 'Failed to delete firing log');
+                    resetDeleteButton($btn);
+                }
+            });
+        } else {
+            // First click - show confirmation
+            var checkIcon = decodeURIComponent($btn.data('check-icon'));
+            $btn.addClass('confirm').html(checkIcon);
+        }
+    });
+
+    // Reset delete button if clicking elsewhere
+    $(document).on('click', function (e) {
+        if (!$(e.target).closest('.gallery-card-delete').length) {
+            $('.gallery-card-delete.confirm').each(function () {
+                resetDeleteButton($(this));
+            });
+        }
+    });
+
+    // Historical close button
+    $('#historical-close').on('click', function () {
+        closeHistoricalView();
+    });
+
+    // Load more card click
+    $(document).on('click', '.gallery-card-load-more', function () {
+        gallery_offset += gallery_limit;
+        fetchFiringGallery(true);
     });
 
     // Simulated temperature input handler
@@ -1558,17 +1833,17 @@ $(document).ready(function () {
         });
     });
 
-    // Fetch last firing data on load
-    fetchLastFiring();
+    // Fetch firing gallery on load
+    fetchFiringGallery(false);
 
     // Initialize graph
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 
     // Re-check profile name truncation on window resize
     var resizeTimer;
-    $(window).on('resize', function() {
+    $(window).on('resize', function () {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function() {
+        resizeTimer = setTimeout(function () {
             updateProfileTruncation();
         }, 150);
     });

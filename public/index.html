@@ -1,31 +1,34 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <title>Kiln Controller</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  
+
   <!-- Scripts -->
   <script src="assets/js/jquery-1.10.2.min.js"></script>
   <script src="assets/js/jquery.event.drag-2.2.js"></script>
   <script src="assets/js/jquery.flot.js"></script>
   <script src="assets/js/jquery.flot.resize.js"></script>
   <script src="assets/js/jquery.flot.draggable.js"></script>
+  <script src="assets/js/jquery.flot.dashes.js"></script>
   <script src="assets/js/jquery.bootstrap-growl.min.js"></script>
   <script src="assets/js/picoreflow.js"></script>
-  
+
   <!-- New Dark Theme Styles -->
-  <link rel="stylesheet" href="assets/css/variables.css"/>
-  <link rel="stylesheet" href="assets/css/layout.css"/>
-  <link rel="stylesheet" href="assets/css/widgets.css"/>
-  <link rel="stylesheet" href="assets/css/components.css"/>
-  <link rel="stylesheet" href="assets/css/responsive.css"/>
+  <link rel="stylesheet" href="assets/css/variables.css" />
+  <link rel="stylesheet" href="assets/css/layout.css" />
+  <link rel="stylesheet" href="assets/css/widgets.css" />
+  <link rel="stylesheet" href="assets/css/components.css" />
+  <link rel="stylesheet" href="assets/css/responsive.css" />
 </head>
+
 <body class="kiln-dashboard">
 
   <!-- Main Dashboard Grid -->
   <main class="dashboard-grid">
-    
+
     <!-- Left: Profiles Widget -->
     <section class="widget widget-profiles">
       <h2 class="widget-title">Firing Profiles</h2>
@@ -46,6 +49,13 @@
       <div class="widget-content">
         <div class="graph-area">
           <div id="graph_container"></div>
+          <!-- Historical View Overlay -->
+          <div class="historical-overlay" id="historical-overlay" style="display:none;">
+            <div class="historical-header">
+              <span class="historical-title" id="historical-title">Historical Firing</span>
+              <button class="historical-close" id="historical-close">✕</button>
+            </div>
+          </div>
         </div>
         <div class="graph-stats">
           <div class="graph-stat">
@@ -61,22 +71,22 @@
             <span class="graph-stat-value" id="graph-remaining">--:--:--</span>
           </div>
         </div>
-        
+
         <!-- Edit Panel (shown in edit mode) -->
         <div id="edit-panel" class="edit-panel" style="display:none;">
           <div class="form-row">
             <label class="form-label" for="form_profile_name">Profile Name</label>
             <input type="text" id="form_profile_name" class="form-input" placeholder="Enter profile name" />
           </div>
-          
+
           <div class="flex gap-sm mt-md">
             <button id="btn_newPoint" class="btn btn-secondary" title="Add Point">+ Point</button>
             <button id="btn_delPoint" class="btn btn-secondary" title="Remove Point">- Point</button>
             <button id="btn_table" class="btn btn-secondary" title="Toggle Table">Table</button>
           </div>
-          
+
           <div id="profile_table" style="display:none;"></div>
-          
+
           <div class="edit-actions mt-md">
             <button id="btn_save" class="btn btn-success">Save</button>
             <button id="btn_exit" class="btn btn-secondary">Cancel</button>
@@ -90,7 +100,7 @@
     <section class="widget widget-insights">
       <h2 class="widget-title">Data Insights</h2>
       <div class="widget-content">
-        
+
         <!-- Metrics Grid -->
         <div class="metrics-grid" id="metrics-grid">
           <div class="metric-card" data-metric="sensor">
@@ -136,7 +146,7 @@
         <div class="controls" id="btn_controls">
           <div class="alert-indicator" id="alert-indicator">
             <svg viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2L1 21h22L12 2zm0 3.5L19.5 19h-15L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/>
+              <path d="M12 2L1 21h22L12 2zm0 3.5L19.5 19h-15L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z" />
             </svg>
           </div>
           <button id="btn_start" class="btn-control btn-start">START</button>
@@ -163,7 +173,7 @@
             <button id="confirm-no" class="btn-confirm-no">Cancel</button>
           </div>
         </div>
-        
+
         <!-- ETA Display (shown while running) -->
         <div id="eta-display" class="mt-md text-center" style="display:none;">
           <span class="text-secondary">ETA: </span>
@@ -171,36 +181,17 @@
         </div>
       </div>
     </section>
-  </main>
 
-  <!-- Last Firing Results (collapsible) -->
-  <aside class="widget widget-last-firing collapsed" id="last_firing_panel" style="display:none;">
-    <button class="collapse-toggle" id="toggle-last-firing">
-      <span class="toggle-icon">▼</span>
-      Last Firing Results
-    </button>
-    <div class="collapse-content">
-      <div class="last-firing-grid">
-        <span class="lf-label">Profile:</span>
-        <span id="last_firing_profile">-</span>
-        
-        <span class="lf-label">Status:</span>
-        <span id="last_firing_status">-</span>
-        
-        <span class="lf-label">Duration:</span>
-        <span id="last_firing_duration">-</span>
-        
-        <span class="lf-label">Cost:</span>
-        <span id="last_firing_cost">-</span>
-        
-        <span class="lf-label">Avg Divergence:</span>
-        <span id="last_firing_divergence">-</span>
-        
-        <span class="lf-label">Completed:</span>
-        <span id="last_firing_timestamp">-</span>
+    <!-- Firing Gallery (inside grid for layout) -->
+    <section class="widget widget-gallery" id="firing_gallery" style="display:none;">
+      <h2 class="widget-title">Past Firings</h2>
+      <div class="gallery-container">
+        <div class="gallery-scroll" id="gallery-scroll">
+          <!-- Cards populated by JS -->
+        </div>
       </div>
-    </div>
-  </aside>
+    </section>
+  </main>
 
   <!-- Delete Profile Confirmation (inline) -->
   <div id="delete-confirm" class="confirm-panel" style="display:none;">
@@ -215,4 +206,5 @@
   </div>
 
 </body>
+
 </html>

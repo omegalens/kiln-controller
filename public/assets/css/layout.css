@@ -30,17 +30,24 @@ body.kiln-dashboard {
 .dashboard-grid {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
-  grid-template-rows: auto;
+  grid-template-rows: 1fr auto;
   align-items: start;
   gap: var(--spacing-lg);
   max-width: 1600px;
   margin: 0 auto;
 }
 
-/* Make profiles and graph widgets the same height */
+/* Profiles and graph on row 1 */
 .widget-profiles,
 .widget-graph {
   grid-row: 1;
+}
+
+/* Data Insights spans both rows to fill the right column */
+.widget-insights {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: stretch;
 }
 
 /* Widget Base */
@@ -117,51 +124,10 @@ body.kiln-dashboard {
   padding: var(--spacing-md);
 }
 
-/* Last Firing Panel */
-.widget-last-firing {
-  margin-top: var(--spacing-lg);
-  grid-column: 1 / -1;
-}
-
-.widget-last-firing .collapse-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--spacing-md);
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  font-family: var(--font-ui);
-  font-size: var(--text-md);
-  font-weight: 500;
-  cursor: pointer;
-  transition: color var(--transition-fast);
-}
-
-.widget-last-firing .collapse-toggle:hover {
-  color: var(--text-primary);
-}
-
-.widget-last-firing .toggle-icon {
-  transition: transform var(--transition-normal);
-}
-
-.widget-last-firing.collapsed .toggle-icon {
-  transform: rotate(-90deg);
-}
-
-.widget-last-firing .collapse-content {
-  max-height: 200px;
-  overflow: hidden;
-  transition: max-height var(--transition-normal), padding var(--transition-normal);
-  padding: 0 var(--spacing-md) var(--spacing-md);
-}
-
-.widget-last-firing.collapsed .collapse-content {
-  max-height: 0;
-  padding-top: 0;
-  padding-bottom: 0;
+/* Gallery Widget - Widescreen: below profiles+graph, next to insights */
+.widget-gallery {
+  grid-column: 1 / 3;
+  grid-row: 2;
 }
 
 /* Responsive Breakpoints - Widgets reflow, don't scale */
@@ -170,9 +136,9 @@ body.kiln-dashboard {
 @media (max-width: 1199px) {
   .dashboard-grid {
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
+    grid-template-rows: auto 1fr auto;
     justify-items: stretch;
-    align-items: start;
+    align-items: stretch;
   }
 
   /* Graph takes full width on top row */
@@ -183,16 +149,24 @@ body.kiln-dashboard {
     justify-self: stretch;
   }
 
-  /* Profiles and Insights side by side on bottom row */
+  /* Profiles and Insights side by side on row 2, aligned heights */
   .widget-profiles {
     grid-column: 1;
     grid-row: 2;
-    max-height: 350px;
+    align-self: stretch;
+    max-height: none;
   }
 
   .widget-insights {
     grid-column: 2;
     grid-row: 2;
+    align-self: stretch;
+  }
+
+  /* Gallery spans full width below profiles/insights */
+  .widget-gallery {
+    grid-column: 1 / -1;
+    grid-row: 3;
   }
 }
 
@@ -203,9 +177,10 @@ body.kiln-dashboard {
   }
 
   .dashboard-grid {
-    grid-template-columns: minmax(180px, 1fr) minmax(200px, 2fr);
-    grid-template-rows: auto auto;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr auto;
     gap: var(--spacing-md);
+    align-items: stretch;
   }
 
   /* Graph spans full width on top */
@@ -215,23 +190,29 @@ body.kiln-dashboard {
     width: 100%;
   }
 
-  /* Profiles on left, below graph, vertically scrollable */
+  /* Profiles and Insights side by side, aligned heights */
   .widget-profiles {
     grid-column: 1;
     grid-row: 2;
-    max-height: 400px;
-    min-height: 200px;
+    align-self: stretch;
+    max-height: none;
   }
 
-  /* Insights on right, below graph */
   .widget-insights {
     grid-column: 2;
     grid-row: 2;
+    align-self: stretch;
   }
 
   .status-header {
     flex-wrap: wrap;
     gap: var(--spacing-sm);
+  }
+
+  /* Gallery full width below profiles/insights on tablets */
+  .widget-gallery {
+    grid-column: 1 / -1;
+    grid-row: 3;
   }
 }
 

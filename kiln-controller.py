@@ -456,37 +456,156 @@ def get_last_firing():
 
 @app.get('/api/firing_logs')
 def get_firing_logs():
-    """Return list of all firing log files"""
+    """Return list of firing log files with pagination support"""
     log.info("/api/firing_logs command received")
     try:
         if not os.path.exists(config.firing_logs_directory):
-            return json.dumps([])
+            return json.dumps({"logs": [], "hasMore": False})
+        
+        # Get pagination params
+        limit = int(bottle.request.query.get('limit', 7))
+        offset = int(bottle.request.query.get('offset', 0))
+        
+        all_files = sorted(os.listdir(config.firing_logs_directory), reverse=True)
+        json_files = [f for f in all_files if f.endswith('.json')]
+        
+        # Slice for pagination
+        paginated_files = json_files[offset:offset + limit]
+        has_more = (offset + limit) < len(json_files)
         
         log_files = []
-        for filename in sorted(os.listdir(config.firing_logs_directory), reverse=True):
-            if filename.endswith('.json'):
-                filepath = os.path.join(config.firing_logs_directory, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        log_data = json.load(f)
-                    # Return summary info only
-                    log_files.append({
-                        'filename': filename,
-                        'profile_name': log_data.get('profile_name'),
-                        'end_time': log_data.get('end_time'),
-                        'duration_seconds': log_data.get('duration_seconds'),
-                        'final_cost': log_data.get('final_cost'),
-                        'avg_divergence': log_data.get('avg_divergence'),
-                        'status': log_data.get('status')
-                    })
-                except Exception as e:
-                    log.error(f"Error reading log file {filename}: {e}")
-                    continue
+        for filename in paginated_files:
+            filepath = os.path.join(config.firing_logs_directory, filename)
+            try:
+                with open(filepath, 'r') as f:
+                    log_data = json.load(f)
+                # Return summary info only
+                log_files.append({
+                    'filename': filename,
+                    'profile_name': log_data.get('profile_name'),
+                    'end_time': log_data.get('end_time'),
+                    'duration_seconds': log_data.get('duration_seconds'),
+                    'final_cost': log_data.get('final_cost'),
+                    'avg_divergence': log_data.get('avg_divergence'),
+                    'currency_type': log_data.get('currency_type'),
+                    'status': log_data.get('status')
+                })
+            except Exception as e:
+                log.error(f"Error reading log file {filename}: {e}")
+                continue
         
-        return json.dumps(log_files)
+        return json.dumps({"logs": log_files, "hasMore": has_more})
     except Exception as e:
         log.error(f"Error listing firing logs: {e}")
-        return json.dumps({"error": "Failed to list firing logs"})    
+        return json.dumps({"error": "Failed to list firing logs"})
+
+@app.get('/api/firing_log/<filename>')
+def get_firing_log(filename):
+    """Return a single firing log with full temperature data for historical graph"""
+    log.info(f"/api/firing_log/{filename} command received")
+    try:
+        # Security: ensure filename doesn't contain path traversal
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        filepath = os.path.join(config.firing_logs_directory, filename)
+        if os.path.exists(filepath):
+            with open(filepath, 'r') as f:
+                return json.dumps(json.load(f))
+        return json.dumps({"error": "Firing log not found"})
+    except Exception as e:
+        log.error(f"Error reading firing log {filename}: {e}")
+        return json.dumps({"error": "Failed to read firing log"})
+
+@app.delete('/api/firing_log/<filename>')
+def delete_firing_log(filename):
+    """Delete a firing log file"""
+    log.info(f"/api/firing_log/{filename} DELETE command received")
+    try:
+        # Security: ensure filename doesn't contain path traversal
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        filepath = os.path.join(config.firing_logs_directory, filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            log.info(f"Deleted firing log: {filepath}")
+            # Also remove from pinned list if present
+            remove_from_pinned(filename)
+            return json.dumps({"success": True})
+        return json.dumps({"error": "Firing log not found"})
+    except Exception as e:
+        log.error(f"Error deleting firing log {filename}: {e}")
+        return json.dumps({"error": "Failed to delete firing log"})
+
+# Pinned logs storage file
+pinned_logs_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "storage", "pinned_logs.json"))
+
+def get_pinned_logs():
+    """Read pinned logs list from file"""
+    try:
+        if os.path.exists(pinned_logs_file):
+            with open(pinned_logs_file, 'r') as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        log.error(f"Error reading pinned logs: {e}")
+        return []
+
+def save_pinned_logs(pinned):
+    """Save pinned logs list to file"""
+    try:
+        os.makedirs(os.path.dirname(pinned_logs_file), exist_ok=True)
+        with open(pinned_logs_file, 'w') as f:
+            json.dump(pinned, f)
+        return True
+    except Exception as e:
+        log.error(f"Error saving pinned logs: {e}")
+        return False
+
+def remove_from_pinned(filename):
+    """Remove a filename from pinned list"""
+    pinned = get_pinned_logs()
+    if filename in pinned:
+        pinned.remove(filename)
+        save_pinned_logs(pinned)
+
+@app.get('/api/pinned_logs')
+def api_get_pinned_logs():
+    """Get list of pinned firing log filenames"""
+    log.info("/api/pinned_logs GET command received")
+    return json.dumps({"pinned": get_pinned_logs()})
+
+@app.post('/api/pinned_logs/<filename>')
+def api_pin_log(filename):
+    """Pin a firing log"""
+    log.info(f"/api/pinned_logs/{filename} POST command received")
+    try:
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        pinned = get_pinned_logs()
+        if filename not in pinned:
+            pinned.insert(0, filename)  # Add to front for ordering
+            save_pinned_logs(pinned)
+        return json.dumps({"success": True, "pinned": pinned})
+    except Exception as e:
+        log.error(f"Error pinning log {filename}: {e}")
+        return json.dumps({"error": "Failed to pin log"})
+
+@app.delete('/api/pinned_logs/<filename>')
+def api_unpin_log(filename):
+    """Unpin a firing log"""
+    log.info(f"/api/pinned_logs/{filename} DELETE command received")
+    try:
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        remove_from_pinned(filename)
+        return json.dumps({"success": True, "pinned": get_pinned_logs()})
+    except Exception as e:
+        log.error(f"Error unpinning log {filename}: {e}")
+        return json.dumps({"error": "Failed to unpin log"})    
 
 def main():
     ip = "0.0.0.0"

@@ -19,11 +19,16 @@
   .widget-profiles {
     grid-column: 1;
     grid-row: 2;
+    align-self: stretch;
+    max-height: none !important;
+    height: 100%;
   }
 
   .widget-insights {
     grid-column: 2;
     grid-row: 2;
+    align-self: stretch;
+    height: 100%;
   }
 
   /* Metrics grid adapts to narrower widget */
@@ -113,10 +118,9 @@
     justify-content: center;
   }
 
-  /* Last firing horizontal layout */
-  .last-firing-grid {
-    grid-template-columns: repeat(3, auto 1fr);
-    gap: var(--spacing-sm) var(--spacing-lg);
+  /* Gallery horizontal scroll */
+  .gallery-card {
+    width: 160px;
   }
 }
 
@@ -153,9 +157,9 @@
     padding: var(--spacing-sm) var(--spacing-md);
   }
 
-  /* Profiles list items smaller */
+  /* Profiles list items fill container width */
   .profile-item {
-    width: 140px;
+    width: 100%;
     padding: var(--spacing-sm);
   }
 
@@ -210,9 +214,9 @@
     font-size: var(--text-xs);
   }
 
-  /* Last firing single column */
-  .last-firing-grid {
-    grid-template-columns: auto 1fr;
+  /* Gallery narrower cards */
+  .gallery-card {
+    width: 140px;
   }
 
   /* Confirm panel full width actions */
