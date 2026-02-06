@@ -2252,20 +2252,6 @@ class PID():
                 # Output is saturated, don't accumulate more integral
                 log.debug("PID output saturated at %.2f, preventing integral windup" % output)
             
-            # Integral decay during cooling: When error is negative (above target),
-            # decay the positive integral term to allow proper cooling
-            if error < 0 and self.iterm > 0:
-                # Decay integral proportionally to how far above target we are
-                decay_rate = getattr(config, 'pid_integral_decay_rate', 0.1)
-                decay_amount = abs(error) * decay_rate * timeDelta
-                old_iterm = self.iterm
-                self.iterm = max(0, self.iterm - decay_amount)
-                if old_iterm != self.iterm:
-                    log.debug("Decaying integral during cooling: %.2f -> %.2f" % (old_iterm, self.iterm))
-                # Recalculate output with decayed integral
-                output_unclamped = p_term + self.iterm + d_term
-                output = sorted([-1 * window_size, output_unclamped, window_size])[1]
-            
             out4logs = output
             output = float(output / window_size)
             

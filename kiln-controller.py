@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import time
 import os
@@ -273,6 +273,12 @@ def handle_storage():
 def handle_config():
     wsock = get_websocket_from_request()
     log.info("websocket (config) opened")
+    # Send config immediately on connection
+    try:
+        wsock.send(get_config())
+    except WebSocketError:
+        log.info("websocket (config) closed")
+        return
     while True:
         try:
             message = wsock.receive()
@@ -437,7 +443,8 @@ def get_config():
         "time_scale_profile": config.time_scale_profile,
         "kwh_rate": config.kwh_rate,
         "kw_elements": config.kw_elements,
-        "currency_type": config.currency_type})
+        "currency_type": config.currency_type,
+        "graph_cutoff_temp": config.graph_cutoff_temp})
 
 @app.get('/api/last_firing')
 def get_last_firing():

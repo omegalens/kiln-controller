@@ -27,8 +27,8 @@ listening_port = 8081
 # This is used to calculate a cost estimate before a run. It's also used
 # to produce the actual cost during a run. My kiln has three
 # elements that when my switches are set to high, consume 9460 watts.
-kwh_rate        = 0.1319  # cost per kilowatt hour per currency_type to calculate cost to run job
-kw_elements     = 9.460 # if the kiln elements are on, the wattage in kilowatts
+kwh_rate        = 0.4319  # cost per kilowatt hour per currency_type to calculate cost to run job
+kw_elements     = 1.8 # if the kiln elements are on, the wattage in kilowatts
 currency_type   = "$"   # Currency Symbol to show when calculating cost to run job
 
 ########################################################################
@@ -100,6 +100,7 @@ try:
 except (ImportError, NotImplementedError, AttributeError):
     print("not running on blinka recognized board, probably a simulation")
     # Set to None for simulation mode
+
     board = None
     spi_sclk = None
     spi_miso = None
@@ -159,13 +160,13 @@ sensor_time_wait = 2
 # well with the simulated oven. You must tune them to work well with 
 # your specific kiln. Note that the integral pid_ki is
 # inverted so that a smaller number means more integral action.
-pid_kp = 10   # Proportional 25,200,200
-pid_ki = 80   # Integral
-pid_kd = 220.83497910261562 # Derivative
+pid_kp = 9.841716225509922   # Proportional 25,200,200
+pid_ki = 7   # Integral
+pid_kd = 171 # Derivative
 
-# Rate at which integral term decays during controlled cooling
-# This prevents accumulated heating integral from keeping heat on during cooling
-pid_integral_decay_rate = 0.5  # Higher = faster decay
+# Note: Integral decay logic has been removed. The PID controller now uses
+# standard anti-windup protection only (integral accumulation stops when output is saturated).
+# The integral term is still reset to 0 when outside the PID control window.
 
 ########################################################################
 #
@@ -178,7 +179,10 @@ stop_integral_windup = True
 ########################################################################
 #
 #   Simulation parameters
-simulate = True
+simulate = False
+if board is None:
+    simulate = True
+    print("Simulation mode auto-enabled due to missing hardware.")
 
 # Initial sensor temperature when simulation starts (degrees in temp_scale units)
 # Set this to test starting from a pre-heated kiln state
@@ -350,7 +354,7 @@ estimated_max_heating_rate = 500
 
 # For "cool" rate segments, what rate to use for time estimation (degrees/hour)
 # This is used to estimate ETA and duration when segments use "cool" rate
-estimated_natural_cooling_rate = 100
+estimated_natural_cooling_rate = 200
 
 # Whether to allow legacy v1 profile format (auto-convert on load)
 # Set to False to require all profiles to use v2 format
@@ -372,6 +376,17 @@ rate_lookahead_seconds = 60
 # Even if the profile requests 10000°/hr, target will only lead actual by this amount
 # Default 50 degrees keeps target within achievable range
 max_target_divergence = 10
+
+########################################################################
+# Graph Configuration
+########################################################################
+
+# Temperature cutoff for graphing after firing completes (degrees)
+# After a firing completes, the graph will continue to update during cooling
+# until the temperature drops below this threshold. This prevents the graph
+# from continuing indefinitely as the kiln cools to room temperature.
+# Set in the same units as temp_scale (Fahrenheit or Celsius)
+graph_cutoff_temp = 100  # degrees
 
 ########################################################################
 # Safety Configuration

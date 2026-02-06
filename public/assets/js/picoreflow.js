@@ -12,16 +12,17 @@ var time_mode = 0;
 var selected_profile = 0;
 var selected_profile_name = 'cone-05-long-bisque.json';
 var firing_profile_name = null; // Track the profile currently being fired
-var temp_scale = "c";
+var temp_scale = "f";  // Default to Fahrenheit to match config.py default
 var time_scale_slope = "s";
 var time_scale_profile = "h";
 var time_scale_long = "Seconds";
-var temp_scale_display = "C";
+var temp_scale_display = "F";  // Default to Fahrenheit to match config.py default
 var kwh_rate = 0.26;
 var kw_elements = 9.460;
 var currency_type = "EUR";
 var last_firing_data = null;
 var is_sim_mode = false;
+var graph_cutoff_temp = 100; // Default cutoff temperature for graphing after firing completes
 
 // Heat glow effect state
 var glow_intensity = 0;           // 0 to 1 scale
@@ -42,6 +43,22 @@ var use_v2_editor = true;
 // Track actual start temp for graph alignment
 var run_actual_start_temp = null;
 var profile_adjusted_for_run = false;
+
+// Helper function to determine if we should continue graphing
+// Returns true if we should add data points, false otherwise
+function shouldContinueGraphing(currentState, currentTemp) {
+    // Always graph when actively running
+    if (currentState == "RUNNING") {
+        return true;
+    }
+    // After firing completes (IDLE), continue graphing during cooling
+    // but stop when temperature drops below cutoff
+    if (currentState == "IDLE") {
+        return currentTemp >= graph_cutoff_temp;
+    }
+    // Don't graph for other states
+    return false;
+}
 
 // Store pending backlog data until profiles are loaded
 var pending_backlog = null;
@@ -929,6 +946,7 @@ function enterEditMode() {
     loadProfileForEditing(profile);
 
     updateProfileTable_v2();
+    $('#profile_table').show();
 }
 
 function leaveEditMode() {
@@ -1397,8 +1415,11 @@ $(document).ready(function () {
                 }
 
                 var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
-                graph.live.data.push([xTime, x.temperature]);
-                graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+                // Only add graph points if we should continue graphing
+                if (shouldContinueGraphing(state, x.temperature)) {
+                    graph.live.data.push([xTime, x.temperature]);
+                    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+                }
 
                 var actualRate = clampRate(parseInt(x.heat_rate) || 0);
                 $('#heat_rate_actual').html(actualRate);
@@ -1495,6 +1516,7 @@ $(document).ready(function () {
         kwh_rate = x.kwh_rate;
         kw_elements = x.kw_elements;
         currency_type = x.currency_type;
+        graph_cutoff_temp = x.graph_cutoff_temp || 100; // Default to 100 if not provided
 
         temp_scale_display = (temp_scale == "c") ? "C" : "F";
 
@@ -1519,8 +1541,13 @@ $(document).ready(function () {
     ws_control.onmessage = function (e) {
         var x = JSON.parse(e.data);
         var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
-        graph.live.data.push([xTime, x.temperature]);
-        graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+        // Only add graph points if we should continue graphing
+        // Note: ws_control doesn't send state, so we check temperature against cutoff
+        // This allows graphing during cooling (when temp > cutoff) but stops when temp drops below cutoff
+        if (x.temperature >= graph_cutoff_temp) {
+            graph.live.data.push([xTime, x.temperature]);
+            graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+        }
     };
 
     // ===================
