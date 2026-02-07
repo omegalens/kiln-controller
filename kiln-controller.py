@@ -212,6 +212,13 @@ def handle_control():
                     #simulation_watcher.add_observer(wsock)
                     #simulated_oven.run_profile(profile)
                     #simulation_watcher.record(profile)
+                elif msgdict.get("cmd") == "RESUME":
+                    log.info("RESUME command received")
+                    result = oven.resume_last_firing()
+                    if result.get("success"):
+                        log.info("Resume successful: %s" % result)
+                    else:
+                        log.warning("Resume failed: %s" % result.get("error"))
                 elif msgdict.get("cmd") == "STOP":
                     log.info("Stop command received")
                     oven.abort_run()
@@ -445,6 +452,20 @@ def get_config():
         "kw_elements": config.kw_elements,
         "currency_type": config.currency_type,
         "graph_cutoff_temp": config.graph_cutoff_temp})
+
+@app.get('/api/resume_state')
+def get_resume_state():
+    """Return resume state if a resumable firing exists within the time window"""
+    log.info("/api/resume_state command received")
+    try:
+        resume_data = oven.get_resume_state()
+        if resume_data:
+            return json.dumps({"available": True, "resume": resume_data})
+        else:
+            return json.dumps({"available": False})
+    except Exception as e:
+        log.error(f"Error reading resume state: {e}")
+        return json.dumps({"available": False, "error": str(e)})
 
 @app.get('/api/last_firing')
 def get_last_firing():

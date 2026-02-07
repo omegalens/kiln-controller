@@ -40,9 +40,8 @@ var profile_segments = [];
 var profile_start_temp = 65;
 var use_v2_editor = true;
 
-// Track actual start temp for graph alignment
-var run_actual_start_temp = null;
-var profile_adjusted_for_run = false;
+// Adjusted profile data for the active firing (received from backend)
+var firing_profile_data = null;
 
 // Helper function to determine if we should continue graphing
 // Returns true if we should add data points, false otherwise
@@ -266,6 +265,12 @@ function selectProfile(index) {
     selected_profile = index;
     selected_profile_name = profiles[index].name;
 
+    // Clear previous firing data when selecting a profile (only if not currently firing)
+    if (state !== "RUNNING") {
+        firing_profile_data = null;
+        graph.live.data = [];
+    }
+
     // Update visual selection
     $('.profile-item').removeClass('selected');
     $('.profile-item[data-index="' + index + '"]').addClass('selected');
@@ -274,6 +279,9 @@ function selectProfile(index) {
     updateProfileTruncation();
 
     updateProfile(index);
+
+    // Show/hide resume button based on whether this profile matches the aborted one
+    updateResumeButtonVisibility();
 }
 
 function updateProfile(id) {
@@ -298,12 +306,7 @@ function updateProfile(id) {
     $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + ': ' + cost + ')');
 
     graph.profile.data = displayData;
-
-    if (run_actual_start_temp !== null && profile_adjusted_for_run) {
-        adjustProfileForActualStartTemp(run_actual_start_temp);
-    } else {
-        graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    }
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 }
 
 // =============================================================================
@@ -468,26 +471,9 @@ function segmentsToLegacy(startTemp, segments) {
     return data;
 }
 
-function adjustProfileForActualStartTemp(actualTemp) {
-    if (!profiles[selected_profile]) return;
-
-    var profile = profiles[selected_profile];
-    var segments = [];
-
-    if (isV2Profile(profile)) {
-        segments = profile.segments || [];
-    } else {
-        segments = legacyToSegments(profile.data);
-    }
-
-    graph.profile.data = segmentsToLegacy(actualTemp, segments);
-    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-    console.log("Profile graph adjusted to start from actual temp: " + actualTemp);
-}
-
 function resetProfileToDefault() {
-    run_actual_start_temp = null;
-    profile_adjusted_for_run = false;
+    firing_profile_data = null;
+    graph.live.data = [];
 
     if (profiles[selected_profile]) {
         updateProfile(selected_profile);
@@ -506,12 +492,9 @@ function processBacklog(backlogData) {
         }
     });
 
-    if (x.log && x.log.length > 0) {
-        var firstLogTemp = x.log[0].temperature;
-        run_actual_start_temp = firstLogTemp;
-        profile_adjusted_for_run = true;
-        adjustProfileForActualStartTemp(firstLogTemp);
-    } else if (x.profile.data && x.profile.data.length > 0) {
+    // Use profile data as received from backend (already adjusted for actual start temp)
+    if (x.profile.data && x.profile.data.length > 0) {
+        firing_profile_data = x.profile.data;
         graph.profile.data = x.profile.data;
     }
 
@@ -892,6 +875,142 @@ function abortTask() {
 }
 
 // =============================================================================
+// Resume Control
+// =============================================================================
+
+var resume_state = null;       // Cached resume state from server
+var resume_check_timer = null; // Timer for periodic resume state checks
+
+function checkResumeState() {
+    $.ajax({
+        url: '/api/resume_state',
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+            if (data.available && data.resume) {
+                resume_state = data.resume;
+                updateResumeButtonVisibility();
+                // Start/restart timer only when resume state exists
+                // This allows us to detect when it expires
+                if (!resume_check_timer) {
+                    startResumeCheckTimer();
+                }
+            } else {
+                resume_state = null;
+                $('#btn_resume').hide();
+                hideResumeConfirmation();
+                // Stop timer when no resume state available
+                stopResumeCheckTimer();
+            }
+        },
+        error: function () {
+            resume_state = null;
+            $('#btn_resume').hide();
+            // Stop timer on error
+            stopResumeCheckTimer();
+        }
+    });
+}
+
+function updateResumeButtonVisibility() {
+    // Resume button only shows when IDLE, resume state exists,
+    // and the currently selected profile matches the aborted profile
+    if (state === 'IDLE' && resume_state && resume_state.profile) {
+        var selectedName = profiles[selected_profile] ? profiles[selected_profile].name : '';
+        if (selectedName === resume_state.profile) {
+            $('#btn_resume').show();
+        } else {
+            $('#btn_resume').hide();
+            hideResumeConfirmation();
+        }
+    } else {
+        $('#btn_resume').hide();
+    }
+}
+
+function showResumeConfirmation() {
+    if (!resume_state) return;
+
+    var details = '<strong>Resume last firing?</strong><br>';
+    details += 'Profile: <strong>' + (resume_state.profile || 'Unknown') + '</strong><br>';
+
+    if (typeof resume_state.current_segment !== 'undefined') {
+        details += 'Segment: ' + (resume_state.current_segment + 1) + ' of ' +
+                   (resume_state.total_segments || '?') +
+                   ' (' + (resume_state.segment_phase || 'ramp') + ')<br>';
+    }
+
+    if (resume_state.temperature) {
+        details += 'Temp at abort: ' + Math.round(resume_state.temperature) + '°' + temp_scale_display + '<br>';
+    }
+    if (resume_state.current_temperature) {
+        details += 'Current temp: ' + Math.round(resume_state.current_temperature) + '°' + temp_scale_display + '<br>';
+    }
+
+    details += 'Aborted: ' + resume_state.minutes_ago + ' min ago';
+
+    $('#resume-confirm-details').html(details);
+    $('#resume-confirm-panel').addClass('visible').show();
+}
+
+function hideResumeConfirmation() {
+    $('#resume-confirm-panel').removeClass('visible');
+    setTimeout(function () {
+        if (!$('#resume-confirm-panel').hasClass('visible')) {
+            $('#resume-confirm-panel').hide();
+        }
+    }, 300);
+}
+
+function resumeTask() {
+    var cmd = { "cmd": "RESUME" };
+
+    // Track the firing profile for highlighting
+    if (resume_state && resume_state.profile) {
+        firing_profile_name = resume_state.profile;
+
+        // Select the matching profile in the list
+        for (var i = 0; i < profiles.length; i++) {
+            if (profiles[i].name === resume_state.profile) {
+                selected_profile = i;
+                updateProfile(i);
+                break;
+            }
+        }
+        renderProfileList();
+    }
+
+    graph.live.data = [];
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+    ws_control.send(JSON.stringify(cmd));
+
+    hideResumeConfirmation();
+    resume_state = null;
+    $('#btn_resume').hide();
+}
+
+function startResumeCheckTimer() {
+    // Check resume state every 60 seconds while idle (to detect expiration)
+    // Only runs when a resume state exists
+    if (resume_check_timer) clearInterval(resume_check_timer);
+    resume_check_timer = setInterval(function () {
+        if (state === 'IDLE') {
+            checkResumeState();
+        } else {
+            // Stop timer if not idle (will restart when transitioning back to IDLE if needed)
+            stopResumeCheckTimer();
+        }
+    }, 60000);
+}
+
+function stopResumeCheckTimer() {
+    if (resume_check_timer) {
+        clearInterval(resume_check_timer);
+        resume_check_timer = null;
+    }
+}
+
+// =============================================================================
 // Confirmation Panel
 // =============================================================================
 
@@ -1258,12 +1377,50 @@ function showHistoricalView(filename) {
 
             // Plot historical data on graph
             var tempLog = data.temperature_log || [];
+
+            // Use actual_elapsed_time (wall-clock, starts at 0) when available,
+            // falling back to runtime for older logs
             var histData = tempLog.map(function (p) {
-                return [p.runtime, p.temperature];
+                var t = (typeof p.actual_elapsed_time !== 'undefined') ? p.actual_elapsed_time : p.runtime;
+                return [t, p.temperature];
             });
-            var targetData = tempLog.map(function (p) {
-                return [p.runtime, p.target];
-            });
+
+            // Use the stored adjusted profile curve if available (aligned to actual start temp).
+            // Fall back to per-point target values for older logs.
+            var targetData;
+            if (data.adjusted_profile && data.adjusted_profile.length > 0) {
+                targetData = data.adjusted_profile;
+
+                // Clip profile curve to the actual firing duration so both curves
+                // share the same time scale. Without this, aborted/short firings show
+                // the actual temperature as an invisible sliver at the left edge.
+                if (histData.length > 0) {
+                    var maxActualTime = histData[histData.length - 1][0];
+                    if (maxActualTime > 0 && targetData[targetData.length - 1][0] > maxActualTime * 1.2) {
+                        var clipped = [];
+                        for (var i = 0; i < targetData.length; i++) {
+                            if (targetData[i][0] <= maxActualTime) {
+                                clipped.push(targetData[i]);
+                            } else {
+                                // Interpolate the profile value at maxActualTime
+                                if (i > 0) {
+                                    var t0 = targetData[i - 1][0], v0 = targetData[i - 1][1];
+                                    var t1 = targetData[i][0], v1 = targetData[i][1];
+                                    var frac = (maxActualTime - t0) / (t1 - t0);
+                                    clipped.push([maxActualTime, v0 + frac * (v1 - v0)]);
+                                }
+                                break;
+                            }
+                        }
+                        targetData = clipped;
+                    }
+                }
+            } else {
+                targetData = tempLog.map(function (p) {
+                    var t = (typeof p.actual_elapsed_time !== 'undefined') ? p.actual_elapsed_time : p.runtime;
+                    return [t, p.target];
+                });
+            }
 
             // Create historical graph with distinct colors
             var historicalProfile = {
@@ -1376,17 +1533,21 @@ $(document).ready(function () {
                 });
                 graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
             }
+            return;
+        }
+
+        // Backend sends adjusted profile data when a firing starts
+        if (x.type == "profile_update") {
+            firing_profile_data = x.data;
+            graph.profile.data = x.data;
+            graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+            return;
         }
 
         if (state != "EDIT") {
             state = x.state;
 
             if (state != state_last) {
-                if (state == "RUNNING" && state_last != "RUNNING" && state_last != "PAUSED") {
-                    run_actual_start_temp = x.temperature;
-                    profile_adjusted_for_run = false;
-                }
-
                 if (state_last == "RUNNING" && state != "PAUSED") {
                     $('#target_temp').html('---');
                     $('#graph-target').html('---');
@@ -1394,24 +1555,45 @@ $(document).ready(function () {
                     $('#heat_rate_set').html('---');
                     $('#elapsed_time').html('--:--:--');
                     updateProgress(0);
-                    showAlert('success', 'Run completed');
+
+                    // Check if this was an emergency shutdown
+                    if (x.emergency) {
+                        showAlert('error', 'EMERGENCY STOP: ' + x.emergency);
+                        showAlertMessage('EMERGENCY: ' + x.emergency);
+                        setAlertFlashing(true);
+                    } else {
+                        showAlert('success', 'Run completed');
+                    }
+
                     setTimeout(function () { fetchFiringGallery(false); }, 1000);
-                    resetProfileToDefault();
+                    // Keep the adjusted profile + live data on graph for review.
+                    // They get cleared when the user selects a profile.
                     // Clear firing profile highlight
                     firing_profile_name = null;
                     renderProfileList();
                 }
             }
 
+            // Persistent emergency alert - show until user starts a new run
+            if (x.emergency && state != "RUNNING") {
+                showAlertMessage('EMERGENCY: ' + x.emergency);
+                setAlertFlashing(true);
+            } else if (!x.emergency && state == "RUNNING") {
+                hideAlertMessage();
+            }
+
             if (state == "RUNNING") {
                 $("#btn_start").hide();
+                $("#btn_resume").hide();
                 $("#btn_stop").show();
                 $('#eta-display').show();
+                hideResumeConfirmation();
+                stopResumeCheckTimer();
                 updateGalleryDisabledState();
 
-                if (!profile_adjusted_for_run && run_actual_start_temp !== null) {
-                    adjustProfileForActualStartTemp(run_actual_start_temp);
-                    profile_adjusted_for_run = true;
+                // Ensure graph shows the adjusted firing profile from the backend
+                if (firing_profile_data) {
+                    graph.profile.data = firing_profile_data;
                 }
 
                 var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
@@ -1456,6 +1638,13 @@ $(document).ready(function () {
                 if (state == "IDLE" && last_firing_data) {
                     displayLastFiring(last_firing_data);
                 }
+
+                // Check resume state when transitioning to IDLE
+                if (state == "IDLE" && state_last == "RUNNING") {
+                    // Brief delay to let the backend save resume state
+                    // Timer will start automatically if resume state exists
+                    setTimeout(function () { checkResumeState(); }, 1500);
+                }
             }
 
             // Update displays
@@ -1491,10 +1680,12 @@ $(document).ready(function () {
             var isHeating = (typeof x.pidstats !== 'undefined' && x.pidstats.out > 0);
             updateHeatGlow(isHeating);
 
-            // Alert indicator for high temperature warning
-            var isHighTemp = x.temperature > hazardTemp();
-            var alertMessage = isHighTemp ? 'HIGH TEMPERATURE WARNING - ' + parseInt(x.temperature) + '°' + temp_scale_display : '';
-            updateAlertIndicator(isHighTemp, alertMessage);
+            // Alert indicator for high temperature warning (don't override emergency alerts)
+            if (!x.emergency) {
+                var isHighTemp = x.temperature > hazardTemp();
+                var alertMessage = isHighTemp ? 'HIGH TEMPERATURE WARNING - ' + parseInt(x.temperature) + '°' + temp_scale_display : '';
+                updateAlertIndicator(isHighTemp, alertMessage);
+            }
 
             state_last = state;
         }
@@ -1618,6 +1809,38 @@ $(document).ready(function () {
     // Stop button
     $('#btn_stop').on('click', function () {
         abortTask();
+    });
+
+    // Resume button - show confirmation with details
+    $('#btn_resume').on('click', function () {
+        // Refresh resume state before showing confirmation
+        $.ajax({
+            url: '/api/resume_state',
+            type: 'GET',
+            dataType: 'json',
+            success: function (data) {
+                if (data.available && data.resume) {
+                    resume_state = data.resume;
+                    showResumeConfirmation();
+                } else {
+                    resume_state = null;
+                    $('#btn_resume').hide();
+                    showAlert('error', 'Resume no longer available (expired)');
+                }
+            },
+            error: function () {
+                showAlert('error', 'Failed to check resume state');
+            }
+        });
+    });
+
+    // Resume confirmation actions
+    $('#resume-confirm-yes').on('click', function () {
+        resumeTask();
+    });
+
+    $('#resume-confirm-no').on('click', function () {
+        hideResumeConfirmation();
     });
 
     // Edit button
@@ -1790,6 +2013,9 @@ $(document).ready(function () {
 
     // Fetch firing gallery on load
     fetchFiringGallery(false);
+
+    // Check resume state on load (timer will start automatically if resume state exists)
+    checkResumeState();
 
     // Initialize graph
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());

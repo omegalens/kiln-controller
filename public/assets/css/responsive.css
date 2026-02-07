@@ -37,7 +37,6 @@
   }
 
   .controls {
-    flex-direction: column;
     padding: 0;
   }
 
@@ -113,8 +112,7 @@
   }
 
   /* Controls horizontal on tablet */
-  .controls {
-    flex-direction: row;
+  .controls-center {
     justify-content: center;
   }
 
@@ -214,6 +212,11 @@
     font-size: var(--text-xs);
   }
 
+  .btn-resume {
+    width: 35px;
+    height: 35px;
+  }
+
   /* Gallery narrower cards */
   .gallery-card {
     width: 140px;
@@ -273,6 +276,11 @@
     height: 64px;
   }
 
+  .btn-resume {
+    width: 32px;
+    height: 32px;
+  }
+
   /* Form inputs */
   .form-input,
   .form-select {
@@ -310,6 +318,12 @@
     height: 56px;
     font-size: 9px;
   }
+
+  .btn-resume {
+    width: 28px;
+    height: 28px;
+    font-size: 7px;
+  }
 }
 
 /* ============================================
@@ -339,6 +353,12 @@
     width: 50px;
     height: 50px;
     font-size: 8px;
+  }
+
+  .btn-resume {
+    width: 25px;
+    height: 25px;
+    font-size: 6px;
   }
 }
 

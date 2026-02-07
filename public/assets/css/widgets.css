@@ -431,20 +431,24 @@
    ============================================ */
 
 .controls {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: var(--spacing-md) 0;
+}
+
+.controls-left {
+  justify-self: end;
+}
+
+.controls-center {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: var(--spacing-lg);
-  padding: var(--spacing-md) 0;
-  position: relative;
 }
 
-/* Alert indicator positioned to the left of center */
-.controls .alert-indicator {
-  position: absolute;
-  left: var(--spacing-md);
-  top: 50%;
-  transform: translateY(-50%);
+.controls-right {
+  justify-self: start;
 }
 
 .btn-control {
@@ -494,6 +498,88 @@
 
 .btn-stop:active {
   transform: scale(0.98);
+}
+
+.btn-resume {
+  background: linear-gradient(145deg, #3498db, #2980b9);
+  color: white;
+  width: 40px;
+  height: 40px;
+  font-size: 0.45rem;
+}
+
+.btn-resume:hover {
+  transform: scale(1.05);
+  box-shadow:
+    0 6px 25px rgba(52, 152, 219, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.btn-resume:active {
+  transform: scale(0.98);
+}
+
+/* Resume confirmation panel */
+.resume-confirm-panel {
+  display: none;
+  background: var(--bg-widget);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin: var(--spacing-sm) 0;
+  animation: slideDown 0.2s ease-out;
+}
+
+.resume-confirm-panel.visible {
+  display: block;
+}
+
+.resume-confirm-details {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-sm);
+  line-height: 1.6;
+}
+
+.resume-confirm-details strong {
+  color: var(--text-primary);
+}
+
+.resume-confirm-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  justify-content: center;
+}
+
+.btn-resume-yes {
+  background: #3498db;
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 8px 20px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.btn-resume-yes:hover {
+  background: #2980b9;
+}
+
+.btn-resume-no {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 20px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.btn-resume-no:hover {
+  background: var(--bg-widget);
+  color: var(--text-primary);
 }
 
 /* Slide-out Confirmation Panel */

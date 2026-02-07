@@ -9,6 +9,7 @@ class OvenWatcher(threading.Thread):
         self.started = None
         self.recording = False
         self.observers = []
+        self.adjusted_profile_data = None
         threading.Thread.__init__(self)
         self.daemon = True
         self.oven = oven
@@ -51,21 +52,34 @@ class OvenWatcher(threading.Thread):
         first_state = self.oven.get_state()
         self.last_log.append(first_state)
         
-        # Regenerate profile graph data starting from the kiln's actual temperature
-        # This ensures the profile line and live line both start at the same Y position
+        # Compute adjusted profile curve starting from the kiln's actual temperature.
+        # Stored separately so we never mutate the original profile object.
         actual_temp = first_state.get('temperature', profile.start_temp)
         if hasattr(profile, 'segments') and profile.segments:
-            # V2 profile: regenerate legacy data with actual kiln temperature
-            profile.data = profile.to_legacy_format(start_temp=actual_temp)
+            self.adjusted_profile_data = profile.to_legacy_format(start_temp=actual_temp)
         elif profile.data and len(profile.data) > 0:
-            # V1 profile: adjust the first point to match actual temperature
-            profile.data[0] = [0, actual_temp]
+            self.adjusted_profile_data = [[0, actual_temp]] + [list(pt) for pt in profile.data[1:]]
+        else:
+            self.adjusted_profile_data = profile.data
+        
+        # Broadcast the adjusted profile to all already-connected clients
+        profile_update = {
+            'type': 'profile_update',
+            'data': self.adjusted_profile_data
+        }
+        self.notify_all(profile_update)
 
     def add_observer(self,observer):
         if self.last_profile:
+            # During an active firing, send the adjusted profile curve;
+            # otherwise send the original profile data.
+            if self.recording and self.adjusted_profile_data:
+                profile_data = self.adjusted_profile_data
+            else:
+                profile_data = self.last_profile.data
             p = {
                 "name": self.last_profile.name,
-                "data": self.last_profile.data, 
+                "data": profile_data,
                 "type" : "profile"
             }
         else:
@@ -76,13 +90,10 @@ class OvenWatcher(threading.Thread):
             'type': "backlog",
             'profile': p,
             'log': log_subset,
-            #'started': self.started
         }
         
-        print(backlog)
         backlog_json = json.dumps(backlog)
         try:
-            print(backlog_json)
             observer.send(backlog_json)
         except:
             log.error("Could not send backlog to new observer")

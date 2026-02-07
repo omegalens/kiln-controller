@@ -376,6 +376,11 @@ class Oven(threading.Thread):
         self.runaway_start_time = None
         self.last_temp_check_time = 0
         self.last_temp_reading = 0
+        # emergency_reason is intentionally NOT cleared by reset() - it persists
+        # so get_state() can report it to the frontend after the oven transitions to IDLE.
+        # It is cleared when a new profile starts (run_profile).
+        if not hasattr(self, 'emergency_reason'):
+            self.emergency_reason = None
 
         # Segment-based control state (v2 profile format)
         self.current_segment_index = 0
@@ -442,6 +447,7 @@ class Oven(threading.Thread):
                     runtime += self.get_start_from_temperature(profile, temp)
 
         self.reset()
+        self.emergency_reason = None  # Clear any previous emergency when starting new run
         # startat includes seek_offset so that update_runtime() preserves the offset
         self.startat = runtime  # Includes both manual startat and seek_offset
         self.runtime = runtime
@@ -467,11 +473,14 @@ class Oven(threading.Thread):
         log.info("Starting")
 
     def abort_run(self):
+        # Save resume state BEFORE reset (needs current segment info)
+        self.save_resume_state()
         # Save firing log if we were running
         if self.profile:
             self.save_firing_log(status="aborted")
         self.reset()
-        self.save_automatic_restart_state()
+        # Clear automatic restart state so server restart won't auto-resume an intentional abort
+        self.clear_automatic_restart_state()
 
     def get_start_time(self):
         return datetime.datetime.now() - datetime.timedelta(milliseconds = self.runtime * 1000)
@@ -692,72 +701,17 @@ class Oven(threading.Thread):
     
     def update_schedule_progress(self):
         """
-        Calculate progress based on temperature achieved and time elapsed.
-        Uses time-weighted progress within segments for accurate UX.
+        Calculate progress based on elapsed time vs estimated remaining time.
+        This gives an accurate time-based percentage regardless of segment structure.
         """
-        if not hasattr(self.profile, 'segments') or not self.profile.segments:
+        remaining = self.estimate_remaining_time()
+        elapsed = self.actual_elapsed_time
+        total_estimated = elapsed + remaining
+        
+        if total_estimated > 0:
+            self.schedule_progress = min(100, (elapsed / total_estimated) * 100)
+        else:
             self.schedule_progress = 0
-            return
-        
-        total_segments = len(self.profile.segments)
-        completed_segments = self.current_segment_index
-        
-        # Base progress from completed segments
-        base_progress = (completed_segments / total_segments) * 100
-        
-        # Add partial progress within current segment
-        if self.current_segment_index < total_segments:
-            segment = self.profile.segments[self.current_segment_index]
-            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-            
-            # Calculate estimated times for ramp and hold phases
-            ramp_time = 0
-            if self.segment_start_temp is not None:
-                temp_range = abs(segment.target - self.segment_start_temp)
-            else:
-                prev_temp = self.profile.start_temp if self.current_segment_index == 0 else self.profile.segments[self.current_segment_index - 1].target
-                temp_range = abs(segment.target - prev_temp)
-            
-            if isinstance(segment.rate, (int, float)) and segment.rate != 0:
-                ramp_time = (temp_range / abs(segment.rate)) * 3600
-            elif segment.rate == "max":
-                max_rate = getattr(config, 'estimated_max_heating_rate', 500)
-                ramp_time = (temp_range / max_rate) * 3600
-            elif segment.rate == "cool":
-                cool_rate = getattr(config, 'estimated_natural_cooling_rate', 100)
-                ramp_time = (temp_range / cool_rate) * 3600
-            
-            hold_time = segment.hold
-            total_segment_time = ramp_time + hold_time
-            
-            # Calculate weights based on actual time proportions
-            ramp_weight = ramp_time / total_segment_time if total_segment_time > 0 else 1.0
-            hold_weight = hold_time / total_segment_time if total_segment_time > 0 else 0.0
-            
-            if self.segment_phase == 'ramp':
-                if temp_range > 0:
-                    start_temp = self.segment_start_temp if self.segment_start_temp else (
-                        self.profile.start_temp if self.current_segment_index == 0 
-                        else self.profile.segments[self.current_segment_index - 1].target
-                    )
-                    temp_progress = abs(current_temp - start_temp) / temp_range
-                    temp_progress = min(1.0, max(0.0, temp_progress))
-                else:
-                    temp_progress = 1.0
-                segment_progress = temp_progress * ramp_weight
-            else:
-                # Ramp complete, now in hold phase
-                if self.hold_start_time and segment.hold > 0:
-                    hold_elapsed = (datetime.datetime.now() - self.hold_start_time).total_seconds()
-                    hold_progress = hold_elapsed / segment.hold
-                    hold_progress = min(1.0, max(0.0, hold_progress))
-                else:
-                    hold_progress = 1.0
-                segment_progress = ramp_weight + (hold_progress * hold_weight)
-            
-            base_progress += (segment_progress / total_segments) * 100
-        
-        self.schedule_progress = min(100, base_progress)
     
     def estimate_remaining_time(self):
         """Estimate remaining time based on rates"""
@@ -787,8 +741,11 @@ class Oven(threading.Thread):
                     hold_elapsed = (datetime.datetime.now() - self.hold_start_time).total_seconds()
                     remaining += max(0, segment.hold - hold_elapsed)
         
-        # Add remaining segments
-        prev_target = current_temp
+        # Add remaining segments - start from current segment's target
+        # (we already accounted for time to reach it above)
+        if self.current_segment_index >= len(self.profile.segments):
+            return remaining
+        prev_target = self.profile.segments[self.current_segment_index].target
         for i in range(self.current_segment_index + 1, len(self.profile.segments)):
             segment = self.profile.segments[i]
             temp_diff = abs(segment.target - prev_target)
@@ -823,6 +780,31 @@ class Oven(threading.Thread):
                 self.state = "IDLE"
                 self.save_automatic_restart_state()
 
+    def _emergency_shutdown(self, reason, status="emergency_stop"):
+        '''Perform emergency shutdown with guaranteed safety actions.
+        The log message and firing log save are non-critical - if they fail,
+        we still MUST reset the oven (turn off heater) and save restart state.'''
+        try:
+            log.error("EMERGENCY SHUTDOWN: %s" % reason)
+        except Exception:
+            pass  # Logging must never prevent shutdown
+        
+        try:
+            if self.profile:
+                self.save_firing_log(status=status)
+        except Exception as e:
+            try:
+                log.error("Failed to save firing log during emergency: %s" % e)
+            except Exception:
+                pass
+        
+        # Set emergency reason BEFORE reset so get_state() can report it
+        self.emergency_reason = reason
+        
+        # CRITICAL: These must always execute
+        self.reset()
+        self.save_automatic_restart_state()
+
     def reset_if_emergency(self):
         '''reset if the temperature is way TOO HOT, or other critical errors detected'''
         try:
@@ -834,21 +816,17 @@ class Oven(threading.Thread):
         if temp >= config.emergency_shutoff_temp:
             log.info("emergency!!! temperature too high")
             if config.ignore_temp_too_high == False:
-                # Save firing log as emergency before aborting
-                if self.profile:
-                    self.save_firing_log(status="emergency_stop")
-                self.reset()
-                self.save_automatic_restart_state()
+                self._emergency_shutdown(
+                    "Temperature too high: %.1f >= %.1f" % (temp, config.emergency_shutoff_temp),
+                    status="emergency_stop")
                 return
         
         if self.board.temp_sensor.status.over_error_limit():
             log.info("emergency!!! too many errors in a short period")
             if config.ignore_tc_too_many_errors == False:
-                # Save firing log as emergency before aborting
-                if self.profile:
-                    self.save_firing_log(status="emergency_stop")
-                self.reset()
-                self.save_automatic_restart_state()
+                self._emergency_shutdown(
+                    "Too many thermocouple errors in a short period",
+                    status="emergency_stop")
                 return
 
         # Advanced Safety Checks (Stall & Runaway)
@@ -876,12 +854,10 @@ class Oven(threading.Thread):
                 # Check temperature rise over the duration
                 temp_rise = temp - self.stall_start_temp
                 if temp_rise < getattr(config, 'stall_min_temp_rise', 2):
-                    log.error("EMERGENCY: Kiln STALL detected. Heater >95% for %.1f min with only %.1f deg rise." % 
-                              ((now - self.stall_start_time)/60, temp_rise))
-                    if self.profile:
-                        self.save_firing_log(status="stalled")
-                    self.reset()
-                    self.save_automatic_restart_state()
+                    self._emergency_shutdown(
+                        "Kiln STALL: Heater >95%% for %.1f min with only %.1f deg rise" %
+                        ((now - self.stall_start_time)/60, temp_rise),
+                        status="stalled")
                     return
         else:
             self.stall_start_time = None
@@ -896,12 +872,10 @@ class Oven(threading.Thread):
                 # Check temperature rise
                 temp_rise = temp - self.runaway_start_temp
                 if temp_rise > getattr(config, 'runaway_min_temp_rise', 10):
-                    log.error("EMERGENCY: RUNAWAY heating detected. Heater <5% for %.1f min but temp rose %.1f deg." % 
-                              ((now - self.runaway_start_time)/60, temp_rise))
-                    if self.profile:
-                        self.save_firing_log(status="runaway")
-                    self.reset()
-                    self.save_automatic_restart_state()
+                    self._emergency_shutdown(
+                        "RUNAWAY heating: Heater <5%% for %.1f min but temp rose %.1f deg" %
+                        ((now - self.runaway_start_time)/60, temp_rise),
+                        status="runaway")
                     return
         else:
             self.runaway_start_time = None
@@ -1167,6 +1141,7 @@ class Oven(threading.Thread):
             'door': 'CLOSED',
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
             'simulate': config.simulate,
+            'emergency': self.emergency_reason,
         }
         
         # Add segment-based fields when using v2 control
@@ -1263,12 +1238,18 @@ class Oven(threading.Thread):
             if hasattr(self, 'ovenwatcher') and self.ovenwatcher.last_log:
                 # Subsample to reasonable size (max 500 points)
                 temp_log = self.ovenwatcher.lastlog_subset(maxpts=500)
-                # Extract only needed fields
+                # Extract needed fields, preferring actual_elapsed_time for the time axis
                 temp_log = [{
                     'runtime': round(entry.get('runtime', 0), 2),
+                    'actual_elapsed_time': round(entry.get('actual_elapsed_time', entry.get('runtime', 0)), 2),
                     'temperature': round(entry.get('temperature', 0), 2),
                     'target': round(entry.get('target', 0), 2)
                 } for entry in temp_log]
+            
+            # Get the adjusted profile curve (starts at actual kiln temp)
+            adjusted_profile = None
+            if hasattr(self, 'ovenwatcher') and self.ovenwatcher.adjusted_profile_data:
+                adjusted_profile = self.ovenwatcher.adjusted_profile_data
             
             # Calculate statistics
             avg_divergence = self.calculate_avg_divergence()
@@ -1281,18 +1262,22 @@ class Oven(threading.Thread):
                 pass
             
             # Create firing log data structure
+            # Use actual_elapsed_time for duration when using rate-based control
+            # (self.runtime is not updated in rate-based mode)
+            duration = self.actual_elapsed_time if self.actual_elapsed_time > 0 else self.runtime
             firing_log = {
                 'profile_name': self.profile.name,
                 'start_time': self.start_time.isoformat() if self.start_time else None,
                 'end_time': datetime.datetime.now().isoformat(),
-                'duration_seconds': int(self.runtime),
+                'duration_seconds': int(duration),
                 'final_cost': round(self.cost, 2),
                 'final_temperature': round(final_temp, 2),
                 'avg_divergence': round(avg_divergence, 2),
                 'currency_type': config.currency_type,
                 'temp_scale': config.temp_scale,
                 'status': status,
-                'temperature_log': temp_log
+                'temperature_log': temp_log,
+                'adjusted_profile': adjusted_profile
             }
             
             # Save to firing logs directory
@@ -1329,6 +1314,305 @@ class Oven(threading.Thread):
         except Exception as e:
             log.error(f"Failed to save firing log: {e}")
             return False
+
+    # =========================================================================
+    # Resume State Management (Option A: separate from auto-restart)
+    # =========================================================================
+
+    def save_resume_state(self):
+        """Save resume state on deliberate abort. Written to a separate file from
+        state.json so auto-restart (power outage) and manual resume don't conflict."""
+        if not self.profile:
+            return False
+        if self.state != "RUNNING":
+            return False
+
+        try:
+            resume_data = {
+                'profile': self.profile.name,
+                'state': 'aborted',
+                'cost': self.cost,
+                'runtime': self.runtime,
+                'temperature': 0,
+                'timestamp': time.time(),
+            }
+
+            # Get current temperature
+            try:
+                resume_data['temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            except (AttributeError, TypeError):
+                pass
+
+            # Save segment state for v2 profiles
+            if getattr(config, 'use_rate_based_control', False) and hasattr(self.profile, 'segments'):
+                resume_data['current_segment'] = self.current_segment_index
+                resume_data['segment_phase'] = self.segment_phase
+                resume_data['total_segments'] = len(self.profile.segments)
+
+            resume_file = getattr(config, 'resume_state_file', None)
+            if not resume_file:
+                log.warning("resume_state_file not configured, skipping resume state save")
+                return False
+
+            # Atomic write
+            temp_fd, temp_path = tempfile.mkstemp(
+                dir=os.path.dirname(resume_file),
+                prefix='.tmp_resume_',
+                suffix='.json'
+            )
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                json.dump(resume_data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(temp_path, resume_file)
+            log.info("Resume state saved: profile=%s, segment=%s, phase=%s" %
+                     (self.profile.name,
+                      resume_data.get('current_segment', 'n/a'),
+                      resume_data.get('segment_phase', 'n/a')))
+            return True
+
+        except Exception as e:
+            log.error("Failed to save resume state: %s" % e)
+            try:
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except:
+                pass
+            return False
+
+    def clear_automatic_restart_state(self):
+        """Remove state.json so a server restart won't auto-resume an intentional abort."""
+        try:
+            if os.path.isfile(config.automatic_restart_state_file):
+                os.remove(config.automatic_restart_state_file)
+                log.info("Cleared automatic restart state file (deliberate abort)")
+        except Exception as e:
+            log.error("Failed to clear automatic restart state: %s" % e)
+
+    def clear_resume_state(self):
+        """Remove resume_state.json after successful resume or expiry."""
+        try:
+            resume_file = getattr(config, 'resume_state_file', None)
+            if resume_file and os.path.isfile(resume_file):
+                os.remove(resume_file)
+                log.info("Cleared resume state file")
+        except Exception as e:
+            log.error("Failed to clear resume state: %s" % e)
+
+    def get_resume_state(self):
+        """Read resume state file and return its data if valid (within time window).
+        Returns dict with resume info, or None if not available."""
+        resume_file = getattr(config, 'resume_state_file', None)
+        if not resume_file or not os.path.isfile(resume_file):
+            return None
+
+        try:
+            # Check age using same window as auto-restart
+            file_age = os.path.getmtime(resume_file)
+            minutes_old = (time.time() - file_age) / 60
+            if minutes_old > config.automatic_restart_window:
+                log.debug("Resume state too old (%.1f min > %d min window)" %
+                          (minutes_old, config.automatic_restart_window))
+                return None
+
+            with open(resume_file, 'r') as f:
+                data = json.load(f)
+
+            if data.get('state') != 'aborted':
+                return None
+
+            # Add computed fields for the frontend
+            data['minutes_ago'] = round(minutes_old, 1)
+            data['window_minutes'] = config.automatic_restart_window
+
+            # Get current kiln temperature for the frontend display
+            try:
+                data['current_temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            except (AttributeError, TypeError):
+                data['current_temperature'] = None
+
+            return data
+
+        except (IOError, ValueError, json.JSONDecodeError) as e:
+            log.error("Failed to read resume state: %s" % e)
+            return None
+
+    def find_resume_segment(self, profile, saved_segment_index, current_temp):
+        """Find the correct segment to resume at based on current temperature
+        and the direction of travel at the time of abort.
+
+        Rules:
+        - Was heating, kiln cooled: scan BACKWARD to find the segment whose
+          range contains the current temperature.
+        - Was cooling, kiln cooled more: stay in same segment if still above
+          target, or advance FORWARD if past the target.
+        - Was holding: if still near hold temp, resume hold. If cooled
+          significantly, scan backward.
+
+        Returns (segment_index, phase) tuple.
+        """
+        if not hasattr(profile, 'segments') or not profile.segments:
+            return (0, 'ramp')
+
+        num_segments = len(profile.segments)
+        if saved_segment_index >= num_segments:
+            return (num_segments - 1, 'ramp')
+
+        saved_segment = profile.segments[saved_segment_index]
+        tolerance = getattr(config, 'segment_complete_tolerance', 5)
+
+        # Determine the effective start temp for each segment
+        segment_starts = [profile.start_temp]
+        for i in range(len(profile.segments) - 1):
+            segment_starts.append(profile.segments[i].target)
+
+        saved_start = segment_starts[saved_segment_index]
+        saved_target = saved_segment.target
+
+        # Determine direction at abort
+        was_heating = (isinstance(saved_segment.rate, (int, float)) and saved_segment.rate > 0) or saved_segment.rate == "max"
+        was_cooling = (isinstance(saved_segment.rate, (int, float)) and saved_segment.rate < 0) or saved_segment.rate == "cool"
+        was_holding = (isinstance(saved_segment.rate, (int, float)) and saved_segment.rate == 0)
+
+        if was_heating:
+            # If kiln cooled below the start of the saved segment, scan backward
+            if current_temp < saved_start - tolerance:
+                for i in range(saved_segment_index - 1, -1, -1):
+                    seg = profile.segments[i]
+                    seg_start = segment_starts[i]
+                    seg_is_heating = (isinstance(seg.rate, (int, float)) and seg.rate > 0) or seg.rate == "max"
+                    if seg_is_heating and seg_start - tolerance <= current_temp <= seg.target + tolerance:
+                        log.info("Resume: scanning back from segment %d to %d (temp %.1f in range %.1f-%.1f)" %
+                                 (saved_segment_index, i, current_temp, seg_start, seg.target))
+                        return (i, 'ramp')
+                # Didn't find a match, start from beginning
+                log.info("Resume: temp %.1f below all segments, starting from segment 0" % current_temp)
+                return (0, 'ramp')
+            # Still within the saved segment's range, resume normally
+            return (saved_segment_index, 'ramp')
+
+        elif was_cooling:
+            # If kiln cooled past the segment's target, advance forward
+            if current_temp <= saved_target + tolerance:
+                next_idx = saved_segment_index + 1
+                if next_idx < num_segments:
+                    log.info("Resume: temp %.1f past cooling target %.1f, advancing to segment %d" %
+                             (current_temp, saved_target, next_idx))
+                    return (next_idx, 'ramp')
+                else:
+                    log.info("Resume: temp %.1f past final cooling target, firing complete" % current_temp)
+                    return (num_segments, 'ramp')  # Will trigger schedule-ended
+            # Still above target, continue cooling from current temp
+            return (saved_segment_index, 'ramp')
+
+        elif was_holding:
+            # If still near hold temp, resume hold
+            if abs(current_temp - saved_target) <= tolerance * 3:
+                return (saved_segment_index, 'hold')
+            # Cooled significantly below hold temp, scan backward for matching heating segment
+            if current_temp < saved_start - tolerance:
+                for i in range(saved_segment_index - 1, -1, -1):
+                    seg = profile.segments[i]
+                    seg_start = segment_starts[i]
+                    seg_is_heating = (isinstance(seg.rate, (int, float)) and seg.rate > 0) or seg.rate == "max"
+                    if seg_is_heating and seg_start - tolerance <= current_temp <= seg.target + tolerance:
+                        log.info("Resume: hold temp drifted, scanning back to segment %d" % i)
+                        return (i, 'ramp')
+                return (0, 'ramp')
+            # Above hold but within range, resume ramp of current segment
+            return (saved_segment_index, 'ramp')
+
+        # Fallback
+        return (saved_segment_index, 'ramp')
+
+    def resume_last_firing(self):
+        """Resume the last aborted firing using the resume state file.
+        Uses temperature-aware segment seeking to find the right place in the profile.
+
+        Returns dict with success/error info."""
+        if self.state != "IDLE":
+            return {"success": False, "error": "Cannot resume, oven state is %s" % self.state}
+
+        resume_data = self.get_resume_state()
+        if not resume_data:
+            return {"success": False, "error": "No resumable firing found (expired or not available)"}
+
+        # Load the profile from disk
+        profile_name = resume_data.get('profile')
+        if not profile_name:
+            return {"success": False, "error": "Resume state missing profile name"}
+
+        filename = "%s.json" % profile_name
+        profile_path = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'storage', 'profiles', filename))
+
+        try:
+            with open(profile_path) as infile:
+                profile_json = json.dumps(json.load(infile))
+            profile = Profile(profile_json)
+        except (IOError, json.JSONDecodeError) as e:
+            return {"success": False, "error": "Failed to load profile '%s': %s" % (profile_name, e)}
+
+        # Get current temperature
+        try:
+            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+        except (AttributeError, TypeError):
+            current_temp = resume_data.get('temperature', 0)
+
+        # V2 segment-based resume with temperature-aware seeking
+        if getattr(config, 'use_rate_based_control', False) and 'current_segment' in resume_data and hasattr(profile, 'segments'):
+            saved_segment = resume_data.get('current_segment', 0)
+
+            # Find the correct segment based on current temperature and direction of travel
+            resume_segment, resume_phase = self.find_resume_segment(
+                profile, saved_segment, current_temp)
+
+            if resume_segment >= len(profile.segments):
+                self.clear_resume_state()
+                return {"success": False, "error": "Firing already complete (temperature past all segments)"}
+
+            log.info("Resume firing (v2): profile=%s, saved_segment=%d, resume_segment=%d, phase=%s, temp=%.1f" %
+                     (profile_name, saved_segment, resume_segment, resume_phase, current_temp))
+
+            self.reset()
+            self.profile = profile
+            self.totaltime = profile.get_duration()
+            self.start_time = datetime.datetime.now()
+            self.wall_clock_start_time = datetime.datetime.now()
+
+            # Set segment state
+            self.current_segment_index = resume_segment
+            self.segment_phase = resume_phase
+            self.segment_start_time = datetime.datetime.now()
+            self.segment_start_temp = current_temp
+
+            if resume_phase == 'hold':
+                self.hold_start_time = datetime.datetime.now()
+                log.info("Resuming hold phase - hold timer restarted from now")
+
+            self.cost = resume_data.get('cost', 0)
+            self.state = "RUNNING"
+
+            log.info("Resume: starting segment %d (%s phase) at %.1f deg" %
+                     (resume_segment, resume_phase, current_temp))
+
+        else:
+            # Legacy v1 resume - use saved runtime
+            startat = resume_data.get('runtime', 0) / 60
+            log.info("Resume firing (v1): profile=%s at minute=%d" % (profile_name, startat))
+            self.run_profile(profile, startat=startat, allow_seek=False)
+            self.cost = resume_data.get('cost', 0)
+
+        # Clear resume state now that we've resumed
+        self.clear_resume_state()
+
+        time.sleep(1)
+        self.ovenwatcher.record(profile)
+
+        return {"success": True, "profile": profile_name,
+                "segment": self.current_segment_index,
+                "phase": self.segment_phase}
 
     def should_i_automatic_restart(self):
         """Read state file with error handling"""
@@ -1464,6 +1748,7 @@ class Oven(threading.Thread):
                 self.heat_then_cool()
                 self.reset_if_emergency()
                 self.reset_if_schedule_ended()
+                time.sleep(self.get_loop_sleep_time())
                 continue
             if self.state == "RUNNING":
                 # Track wall-clock time since actual start (no seek offset)
@@ -1493,6 +1778,12 @@ class Oven(threading.Thread):
                 
                 self.heat_then_cool()
                 self.reset_if_emergency()
+                time.sleep(self.get_loop_sleep_time())
+
+    def get_loop_sleep_time(self):
+        """Get wall-clock sleep time for the main loop.
+        Override in SimulatedOven to apply speedup factor."""
+        return self.time_step
 
 class SimulatedOven(Oven):
 
@@ -1518,7 +1809,11 @@ class SimulatedOven(Oven):
 
         # start thread
         self.start()
-        log.info("SimulatedOven started")
+        log.info("SimulatedOven started (speedup_factor=%d)" % self.speedup_factor)
+
+    def get_loop_sleep_time(self):
+        """Simulation runs faster: wall-clock sleep is reduced by speedup factor."""
+        return self.time_step / self.speedup_factor
 
     # runtime is in sped up time, start_time is actual time of day
     def get_start_time(self):
@@ -1730,9 +2025,7 @@ class SimulatedOven(Oven):
         except KeyError:
             pass
 
-        # we don't actually spend time heating & cooling during
-        # a simulation, so sleep.
-        time.sleep(self.time_step / self.speedup_factor)
+        # No sleep here - the main run() loop handles timing via get_loop_sleep_time()
 
 
 class RealOven(Oven):

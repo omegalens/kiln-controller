@@ -115,8 +115,8 @@ except (ImportError, NotImplementedError, AttributeError):
 # There are only two breakoutboards supported. 
 #   max31855 - only supports type K thermocouples
 #   max31856 - supports many thermocouples
-max31855 = 1
-max31856 = 0
+max31855 = 0
+max31856 = 1
 # uncomment these two lines if using MAX-31856
 try:
     import adafruit_max31856
@@ -194,7 +194,7 @@ sim_t_env      = 65   # deg - ambient temp outside the kiln
 # Thermal simulation parameters
 sim_c_heat     = 500.0  # J/K  heat capacity of heat element
 sim_c_oven     = 5000.0 # J/K  heat capacity of oven
-sim_p_heat     = 5450.0 # W    heating power of oven
+sim_p_heat     = 9000.0 # W    heating power of oven
 sim_R_o_nocool = 1.0   # K/W  thermal resistance oven -> environment (higher = better insulation, slower cooling)
 sim_R_o_cool   = 0.05   # K/W  " with cooling
 sim_R_ho_noair = 0.1    # K/W  thermal resistance heat element -> oven
@@ -206,7 +206,7 @@ sim_R_ho_air   = 0.05   # K/W  " with internal air circulation
 # Set as high as 1000 for rapid testing of complete profiles.
 # This affects all simulation timing: temperature changes, hold durations, etc.
 # NOTE: Only affects simulation mode, has no effect on RealOven deployment.
-sim_speedup_factor = 1
+sim_speedup_factor = 100
 
 
 ########################################################################
@@ -297,6 +297,11 @@ ignore_tc_too_many_errors = False
 automatic_restarts = True
 automatic_restart_window = 15 # max minutes since power outage
 automatic_restart_state_file = os.path.abspath(os.path.join(os.path.dirname( __file__ ),'state.json'))
+
+# Resume state file - written on deliberate abort, used by manual Resume button.
+# Separate from state.json so auto-restart (power outage) and manual resume don't conflict.
+# The resume window uses the same automatic_restart_window (15 min default).
+resume_state_file = os.path.abspath(os.path.join(os.path.dirname( __file__ ),'resume_state.json'))
 
 ########################################################################
 # load kiln profiles from this directory

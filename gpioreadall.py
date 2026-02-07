@@ -6,10 +6,15 @@
 # 2022-04-07    typo
 """
 Read all GPIO
-This version for raspi-gpio debug tool
+This version uses RPi.GPIO library
 """
 import sys, os, time
-import subprocess
+try:
+    import RPi.GPIO as GPIO
+    GPIO_AVAILABLE = True
+except (ImportError, RuntimeError):
+    GPIO_AVAILABLE = False
+    print("Warning: RPi.GPIO not available. Cannot read GPIO states.")
 
 MODES=["IN", "OUT", "ALT5", "ALT4", "ALT0", "ALT1", "ALT2", "ALT3"]
 HEADER = ('3.3v', '5v', 2, '5v', 3, 'GND', 4, 14, 'GND', 15, 17, 18, 27, 'GND', 22, 23, '3.3v', 24, 10, 'GND', 9, 25, 11, 8, 'GND', 7, 0, 1, 5, 'GND', 6, 12, 13, 'GND', 19, 16, 26, 20, 'GND', 21)
@@ -51,39 +56,78 @@ COL = {
 TYPE = 0
 rev = 0
 
+# GPIO pin alternate function names mapping
+# Common alternate functions for Raspberry Pi GPIO pins
+ALT_FUNCTIONS = {
+    2: 'SDA.1', 3: 'SCL.1', 4: 'GPIO.7', 14: 'TxD', 15: 'RxD',
+    17: 'GPIO.0', 18: 'GPIO.1', 27: 'GPIO.2', 22: 'GPIO.3',
+    23: 'GPIO.4', 24: 'GPIO.5', 10: 'MOSI', 9: 'MISO',
+    11: 'SCLK', 8: 'CE0', 7: 'CE1', 0: 'SDA.0', 1: 'SCL.0',
+    5: 'GPIO.21', 6: 'GPIO.22', 13: 'GPIO.23', 19: 'GPIO.24',
+    26: 'GPIO.25', 12: 'GPIO.26', 16: 'GPIO.27', 20: 'GPIO.28',
+    21: 'GPIO.29'
+}
+
 def pin_state(g):
     """
     Return "state" of BCM g
     Return is tuple (name, mode, value)
     """
-    result = subprocess.run(['raspi-gpio', 'get', ascii(g)], stdout=subprocess.PIPE).stdout.decode('utf-8')
-
-    D = {}  # Convert output of raspi-gpio get to dict for convenience
-    paras = result.split()
-    for par in paras[2:] :
-        p, v = par.split('=')
-        if (v.isdigit()):
-            D[p] = int(v)
-        else:
-            D[p] = v
-
-    if('fsel' in D):
-        if(D['fsel'] < 2): # i.e. IN or OUT
+    if not GPIO_AVAILABLE:
+        return 'GPIO{}'.format(g), 'N/A', '?'
+    
+    # First, try to read from /sys/class/gpio (non-invasive)
+    gpio_path = '/sys/class/gpio/gpio{}'.format(g)
+    if os.path.exists(gpio_path):
+        try:
+            with open(os.path.join(gpio_path, 'direction'), 'r') as f:
+                direction = f.read().strip()
+            with open(os.path.join(gpio_path, 'value'), 'r') as f:
+                value = int(f.read().strip())
+            mode = direction.upper()
             name = 'GPIO{}'.format(g)
-        else:
-            name = D['func']
-
-        mode = MODES[D['fsel']]
-        if(D['fsel'] == 0 and 'pull' in D):
-            if(D['pull'] == 'UP'):
-                mode = 'IN ^'
-            if(D['pull'] == 'DOWN'):
-                mode = 'IN v'
-    else:
-        name = D['func']
-        mode = ''
-
-    return name, mode, D['level']
+            return name, mode, value
+        except:
+            pass
+    
+    # If not in /sys/class/gpio, pin might be in alternate function mode
+    # or not exported. Try to read it with RPi.GPIO (this will temporarily
+    # configure it, but we'll try to be safe)
+    try:
+        GPIO.setup(g, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+        value = GPIO.input(g)
+        mode = 'IN'
+        name = 'GPIO{}'.format(g)
+        
+        # Try to detect pull configuration
+        GPIO.setup(g, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        value_up = GPIO.input(g)
+        GPIO.setup(g, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        value_down = GPIO.input(g)
+        
+        if value_up == 1 and value_down == 0:
+            mode = 'IN ^'  # Pull-up
+        elif value_up == 0 and value_down == 0:
+            mode = 'IN v'  # Pull-down
+        
+        # Reset to no pull
+        GPIO.setup(g, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+        
+        return name, mode, value
+        
+    except RuntimeError:
+        # Pin is likely in alternate function mode (SPI, I2C, UART, etc.)
+        # or in use by another process
+        name = ALT_FUNCTIONS.get(g, 'GPIO{}'.format(g))
+        mode = 'ALT'
+        value = '?'
+        return name, mode, value
+    except Exception:
+        # Any other error - pin might be reserved or unavailable
+        name = ALT_FUNCTIONS.get(g, 'GPIO{}'.format(g))
+        mode = 'N/A'
+        value = '?'
+        return name, mode, value
 
 def print_gpio(pin_state):
     """
@@ -135,6 +179,17 @@ def get_hardware_revision():
 
 def main():
     global TYPE, rev
+    
+    if not GPIO_AVAILABLE:
+        print("Error: RPi.GPIO is not available.")
+        print("Make sure you're running on a Raspberry Pi and RPi.GPIO is installed:")
+        print("  pip install RPi.GPIO")
+        sys.exit(1)
+    
+    # Initialize GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)  # Suppress warnings about pins already in use
+    
     rev = get_hardware_revision()
 
     if(rev & 0x800000):   # New Style
@@ -144,7 +199,11 @@ def main():
         MM = [0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 3, 6, 2, 3, 6, 2]
         TYPE = MM[rev] # Map Old Style revision to TYPE
 
-    print_gpio(pin_state)
+    try:
+        print_gpio(pin_state)
+    finally:
+        # Clean up GPIO
+        GPIO.cleanup()
 
 if __name__ == '__main__':
 	main()
