@@ -1,1 +1,1 @@
-{"type": "profile", "version": 2, "name": "test-200-250", "start_temp": 100, "temp_units": "f", "segments": [{"rate": 750, "target": 200, "hold": 25.333333333333332}, {"rate": 600, "target": 250, "hold": 21.666666666666668}]}
+{"type": "profile", "version": 2, "name": "test-200-250", "start_temp": 100, "temp_units": "f", "segments": [{"rate": 750, "target": 200, "hold": 0}]}

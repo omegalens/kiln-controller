@@ -188,6 +188,65 @@ class TestProfileV2:
         assert profile.get_hold_duration(1) == 3600  # 60 min in seconds
         assert profile.get_hold_duration(2) == 0
 
+    def test_find_seek_segment_cold_kiln(self):
+        """Cold kiln should start at segment 0"""
+        profile = get_v2_profile()
+        # Profile: seg0 rate=100 target=200, seg1 rate=50 target=250, seg2 rate=200 target=1000
+        idx, phase = profile.find_seek_segment(65)  # Room temp
+        assert idx == 0
+        assert phase == 'ramp'
+
+    def test_find_seek_segment_hot_kiln_mid_profile(self):
+        """Kiln at 220F should skip seg0 (target 200) and start at seg1 (target 250)"""
+        profile = get_v2_profile()
+        idx, phase = profile.find_seek_segment(220)
+        assert idx == 1
+        assert phase == 'ramp'
+
+    def test_find_seek_segment_hot_kiln_past_multiple(self):
+        """Kiln at 500F should skip seg0 (200) and seg1 (250), start at seg2 (1000)"""
+        profile = get_v2_profile()
+        idx, phase = profile.find_seek_segment(500)
+        assert idx == 2
+        assert phase == 'ramp'
+
+    def test_find_seek_segment_at_target_within_tolerance(self):
+        """Kiln within tolerance of seg0 target should skip to seg1"""
+        profile = get_v2_profile()
+        idx, phase = profile.find_seek_segment(197)  # Within 5F of 200
+        assert idx == 1
+        assert phase == 'ramp'
+
+    def test_find_seek_segment_past_all(self):
+        """Kiln past all segment targets — profile effectively complete"""
+        profile = get_v2_profile()
+        idx, phase = profile.find_seek_segment(1000)
+        # Past all segments (seg2 target is 1000, within tolerance)
+        assert idx == len(profile.segments)  # Past end
+
+    def test_find_seek_segment_with_cooling(self):
+        """Seek with a cooling segment"""
+        profile = Profile(json.dumps({
+            "name": "seek-cool-test",
+            "version": 2,
+            "start_temp": 65,
+            "temp_units": "f",
+            "segments": [
+                {"rate": 200, "target": 1000, "hold": 0},
+                {"rate": -100, "target": 800, "hold": 30},
+                {"rate": 100, "target": 1200, "hold": 0}
+            ]
+        }))
+        # Kiln at 900F: past seg0 (1000? no, 900 < 1000), should be in seg0
+        idx, phase = profile.find_seek_segment(900)
+        assert idx == 0
+        assert phase == 'ramp'
+
+        # Kiln at 1000F: at seg0 target, skip to seg1 (cooling to 800)
+        idx, phase = profile.find_seek_segment(1000)
+        assert idx == 1
+        assert phase == 'ramp'
+
 
 # =============================================================================
 # Test Legacy Profile Loading

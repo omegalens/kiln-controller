@@ -5,6 +5,7 @@
 
 var state = "IDLE";
 var state_last = "";
+var edit_mode = false;
 var graph = ['profile', 'live'];
 var points = [];
 var profiles = [];
@@ -20,7 +21,6 @@ var temp_scale_display = "F";  // Default to Fahrenheit to match config.py defau
 var kwh_rate = 0.26;
 var kw_elements = 9.460;
 var currency_type = "EUR";
-var last_firing_data = null;
 var is_sim_mode = false;
 var graph_cutoff_temp = 100; // Default cutoff temperature for graphing after firing completes
 
@@ -42,6 +42,11 @@ var use_v2_editor = true;
 
 // Adjusted profile data for the active firing (received from backend)
 var firing_profile_data = null;
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // Helper function to determine if we should continue graphing
 // Returns true if we should add data points, false otherwise
@@ -69,10 +74,10 @@ if (window.location.protocol == 'https:') {
 }
 var host = "" + protocol + "//" + window.location.hostname + ":" + window.location.port;
 
-var ws_status = new WebSocket(host + "/status");
-var ws_control = new WebSocket(host + "/control");
-var ws_config = new WebSocket(host + "/config");
-var ws_storage = new WebSocket(host + "/storage");
+var ws_status = null;
+var ws_control = null;
+var ws_config = null;
+var ws_storage = null;
 
 if (window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;
 
@@ -216,7 +221,7 @@ function renderProfileList() {
         if (isSelected) itemClass += ' selected';
 
         var html = '<li class="' + itemClass + '" data-index="' + i + '">';
-        html += '<span class="profile-name"><span class="profile-name-text">' + profile.name + '</span></span>';
+        html += '<span class="profile-name"><span class="profile-name-text">' + escapeHtml(profile.name) + '</span></span>';
         html += '<div class="profile-bar-container">';
         html += '<div class="profile-bar" style="width: ' + barWidth + '%; background-color: ' + tempColor + ';"></div>';
         html += '</div>';
@@ -301,7 +306,7 @@ function updateProfile(id) {
     var cost = (kwh * kwh_rate).toFixed(2);
     var job_time = new Date(job_seconds * 1000).toISOString().substr(11, 8);
 
-    $('#sel_prof').html(profiles[id].name);
+    $('#sel_prof').text(profiles[id].name);
     $('#sel_prof_eta').html(job_time);
     $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + ': ' + cost + ')');
 
@@ -487,7 +492,7 @@ function processBacklog(backlogData) {
     $.each(profiles, function (i, v) {
         if (v.name == x.profile.name) {
             selected_profile = i;
-            $('#sel_prof').html(v.name);
+            $('#sel_prof').text(v.name);
             renderProfileList();
         }
     });
@@ -497,6 +502,10 @@ function processBacklog(backlogData) {
         firing_profile_data = x.profile.data;
         graph.profile.data = x.profile.data;
     }
+
+    // Clear any real-time points that arrived before backlog was processed
+    // (race condition: status updates can arrive while waiting for profiles to load)
+    graph.live.data = [];
 
     // Process log entries
     $.each(x.log, function (i, v) {
@@ -932,7 +941,7 @@ function showResumeConfirmation() {
     if (!resume_state) return;
 
     var details = '<strong>Resume last firing?</strong><br>';
-    details += 'Profile: <strong>' + (resume_state.profile || 'Unknown') + '</strong><br>';
+    details += 'Profile: <strong>' + escapeHtml(resume_state.profile || 'Unknown') + '</strong><br>';
 
     if (typeof resume_state.current_segment !== 'undefined') {
         details += 'Segment: ' + (resume_state.current_segment + 1) + ' of ' +
@@ -1032,7 +1041,7 @@ function hideConfirmation() {
 // =============================================================================
 
 function enterNewMode() {
-    state = "EDIT";
+    edit_mode = true;
 
     $('#btn_controls').hide();
     $('#edit-panel').slideDown();
@@ -1051,7 +1060,7 @@ function enterNewMode() {
 }
 
 function enterEditMode() {
-    state = "EDIT";
+    edit_mode = true;
 
     $('#btn_controls').hide();
     $('#edit-panel').slideDown();
@@ -1071,7 +1080,7 @@ function enterEditMode() {
 function leaveEditMode() {
     selected_profile_name = $('#form_profile_name').val();
     ws_storage.send('GET');
-    state = "IDLE";
+    edit_mode = false;
 
     $('#edit-panel').slideUp();
     $('#btn_controls').show();
@@ -1321,7 +1330,7 @@ function renderGallery(logs, append, hasMore) {
         var cardHtml = '<div class="gallery-card' + (isRunning ? ' disabled' : '') + (isPinned ? ' pinned' : '') +
             '" data-filename="' + log.filename + '">' +
             '<button class="gallery-card-pin' + (isPinned ? ' pinned' : '') + '">' + pinIcon + '</button>' +
-            '<div class="gallery-card-profile">' + (log.profile_name || '-') + '</div>' +
+            '<div class="gallery-card-profile">' + escapeHtml(log.profile_name || '-') + '</div>' +
             '<div class="gallery-card-date">' + dateStr + '</div>' +
             '<div class="gallery-card-stats">' +
             '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Duration</span>' +
@@ -1487,6 +1496,156 @@ function resetDeleteButton($btn) {
 }
 
 // =============================================================================
+// Graph Crosshair Indicator
+// =============================================================================
+
+var crosshair_els = null; // { line, dot, info } — cached DOM references
+
+function initCrosshair() {
+    var $area = $('.graph-area');
+
+    // Create overlay elements once, appended to .graph-area (survives Flot re-plots)
+    var $line = $('<div class="crosshair-line"></div>');
+    var $dot  = $('<div class="crosshair-dot"></div>');
+    var $info = $('<div class="crosshair-info">' +
+        '<div class="crosshair-info-row actual"></div>' +
+        '<div class="crosshair-info-row setpoint"></div>' +
+        '<div class="crosshair-info-row time"></div>' +
+        '</div>');
+
+    $area.append($line, $dot, $info);
+    crosshair_els = { line: $line, dot: $dot, info: $info };
+
+    // Desktop events
+    $('#graph_container').on('mousemove', function (e) {
+        onCrosshairMove(e.pageX, e.pageY);
+    });
+    $('#graph_container').on('mouseleave', hideCrosshair);
+
+    // Touch events
+    $('#graph_container').on('touchstart touchmove', function (e) {
+        var touch = e.originalEvent.touches[0];
+        if (touch) {
+            e.preventDefault();
+            onCrosshairMove(touch.pageX, touch.pageY);
+        }
+    });
+    $('#graph_container').on('touchend touchcancel', hideCrosshair);
+}
+
+function onCrosshairMove(pageX, pageY) {
+    if (edit_mode) { hideCrosshair(); return; }
+    if (!graph.plot || !crosshair_els) return;
+
+    var plotOffset = graph.plot.offset();
+    var axes = graph.plot.getAxes();
+    var canvasX = pageX - plotOffset.left;
+    var canvasY = pageY - plotOffset.top;
+
+    // Bounds check
+    var pw = graph.plot.width();
+    var ph = graph.plot.height();
+    if (canvasX < 0 || canvasX > pw || canvasY < 0 || canvasY > ph) {
+        hideCrosshair();
+        return;
+    }
+
+    var timeVal = axes.xaxis.c2p(canvasX);
+
+    // Find nearest points in both series
+    var livePoint = findNearestPoint(graph.live.data, timeVal);
+    var profPoint = findNearestPoint(graph.profile.data, timeVal);
+
+    // Need at least one series with data
+    if (!livePoint && !profPoint) { hideCrosshair(); return; }
+
+    // Determine which series the dot tracks
+    var dotPoint, onProfile;
+    if (livePoint) {
+        dotPoint = livePoint;
+        onProfile = false;
+    } else {
+        dotPoint = profPoint;
+        onProfile = true;
+    }
+
+    // All positions are relative to .graph-area (position: relative parent).
+    // graph.plot.pointOffset() returns coords relative to #graph_container,
+    // and $gc.position() gives #graph_container's offset within .graph-area.
+    var $gc = $('#graph_container');
+    var gcPos = $gc.position();
+    var areaOffset = $('.graph-area').offset();
+    var lineX = pageX - areaOffset.left;
+
+    // Flot's internal plot offset (padding for axes labels inside #graph_container)
+    var flotPadding = graph.plot.getPlotOffset();
+
+    // Vertical line: spans the plot area height
+    crosshair_els.line.css({
+        display: 'block',
+        left: lineX + 'px',
+        top: (gcPos.top + flotPadding.top) + 'px',
+        height: ph + 'px'
+    });
+
+    // Dot: pointOffset returns {left, top} relative to #graph_container
+    var pOff = graph.plot.pointOffset({ x: dotPoint[0], y: dotPoint[1] });
+    crosshair_els.dot.css({
+        display: 'block',
+        left: (gcPos.left + pOff.left) + 'px',
+        top: (gcPos.top + pOff.top) + 'px'
+    });
+    crosshair_els.dot.toggleClass('on-profile', onProfile);
+
+    // Info box text
+    var actualText = livePoint ? (Math.round(livePoint[1]) + '°') : '---';
+    var setpointText = profPoint ? (Math.round(profPoint[1]) + '°') : '---';
+    var timeText = formatCrosshairTime(timeVal, axes);
+
+    crosshair_els.info.find('.actual').text('Actual: ' + actualText);
+    crosshair_els.info.find('.setpoint').text('Set: ' + setpointText);
+    crosshair_els.info.find('.time').text('Time: ' + timeText);
+    crosshair_els.info.css('display', 'block');
+}
+
+function findNearestPoint(data, timeVal) {
+    if (!data || data.length === 0) return null;
+
+    // Binary search for nearest time
+    var lo = 0, hi = data.length - 1;
+    while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (data[mid][0] < timeVal) lo = mid + 1;
+        else hi = mid;
+    }
+
+    // Check lo and lo-1 to find closest
+    var best = lo;
+    if (lo > 0 && Math.abs(data[lo - 1][0] - timeVal) < Math.abs(data[lo][0] - timeVal)) {
+        best = lo - 1;
+    }
+    return data[best];
+}
+
+function formatCrosshairTime(seconds, axes) {
+    if (axes.xaxis.max > 3600) {
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+    }
+    var mins = Math.floor(seconds / 60);
+    var secs = Math.floor(seconds % 60);
+    return mins + 'm ' + (secs < 10 ? '0' : '') + secs + 's';
+}
+
+function hideCrosshair() {
+    if (!crosshair_els) return;
+    crosshair_els.line.css('display', 'none');
+    crosshair_els.dot.css('display', 'none');
+    crosshair_els.info.css('display', 'none');
+}
+
+// =============================================================================
 // Document Ready - Initialize
 // =============================================================================
 
@@ -1496,19 +1655,60 @@ $(document).ready(function () {
         return;
     }
 
+    // WebSocket reconnection helper with exponential backoff
+    function connectWebSocket(path, setupHandlers) {
+        var ws = new WebSocket(host + path);
+        var reconnectDelay = 1000;
+        var maxDelay = 30000;
+
+        ws.onclose = function () {
+            console.log("WebSocket " + path + " closed, reconnecting in " + reconnectDelay + "ms");
+            disconnectedCount++;
+            updateConnectionStatus();
+            setTimeout(function () {
+                var newWs = connectWebSocket(path, setupHandlers);
+                if (path === "/status") ws_status = newWs;
+                else if (path === "/control") ws_control = newWs;
+                else if (path === "/config") ws_config = newWs;
+                else if (path === "/storage") ws_storage = newWs;
+            }, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+        };
+
+        ws.onerror = function (e) {
+            console.error("WebSocket " + path + " error", e);
+        };
+
+        setupHandlers(ws);
+        ws.addEventListener('open', function () {
+            reconnectDelay = 1000;
+            disconnectedCount = Math.max(0, disconnectedCount - 1);
+            updateConnectionStatus();
+        });
+        return ws;
+    }
+
+    var disconnectedCount = 0;
+    function updateConnectionStatus() {
+        if (disconnectedCount > 0) {
+            if ($('#connection-banner').length === 0) {
+                $('body').prepend('<div id="connection-banner" style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#d32f2f;color:white;text-align:center;padding:8px;font-size:14px;">Connection lost — reconnecting...</div>');
+            }
+        } else {
+            $('#connection-banner').remove();
+        }
+    }
+
     // ===================
     // Status Socket
     // ===================
 
-    ws_status.onopen = function () {
+    ws_status = connectWebSocket("/status", function(ws) {
+    ws.onopen = function () {
         console.log("Status Socket connected");
     };
 
-    ws_status.onclose = function () {
-        showAlert('error', 'Status WebSocket disconnected');
-    };
-
-    ws_status.onmessage = function (e) {
+    ws.onmessage = function (e) {
         var x = JSON.parse(e.data);
 
         if (x.type == "backlog") {
@@ -1544,9 +1744,11 @@ $(document).ready(function () {
             return;
         }
 
-        if (state != "EDIT") {
-            state = x.state;
+        if (!edit_mode) {
+            if (!x || x.state === undefined) return;
 
+            state = x.state;
+            try {
             if (state != state_last) {
                 if (state_last == "RUNNING" && state != "PAUSED") {
                     $('#target_temp').html('---');
@@ -1600,6 +1802,15 @@ $(document).ready(function () {
                 // Only add graph points if we should continue graphing
                 if (shouldContinueGraphing(state, x.temperature)) {
                     graph.live.data.push([xTime, x.temperature]);
+                    // Cap live data to prevent memory growth on long firings
+                    if (graph.live.data.length > 10000) {
+                        var half = Math.floor(graph.live.data.length / 2);
+                        var downsampled = [];
+                        for (var di = 0; di < half; di += 2) {
+                            downsampled.push(graph.live.data[di]);
+                        }
+                        graph.live.data = downsampled.concat(graph.live.data.slice(half));
+                    }
                     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
                 }
 
@@ -1616,7 +1827,7 @@ $(document).ready(function () {
                 } else {
                     $('#heat_rate_set').html('---');
                     $('#elapsed_time').html(formatSecondsToHHMMSS(x.runtime || 0));
-                    var left = parseInt(x.totaltime - x.runtime);
+                    var left = Math.max(0, Math.floor(x.totaltime - x.runtime));
                     var eta = formatSecondsToHHMMSS(left);
                     $('#eta-time').text(eta);
                     updateProgress(parseFloat(x.runtime) / parseFloat(x.totaltime) * 100);
@@ -1630,14 +1841,9 @@ $(document).ready(function () {
                 $("#btn_stop").hide();
                 $('#eta-display').hide();
 
-                var actualRate = clampRate(parseInt(x.heat_rate) || 0);
-                $('#heat_rate_actual').html(actualRate);
+                $('#heat_rate_actual').html('---');
                 $('#heat_rate_set').html('---');
                 $('#elapsed_time').html('--:--:--');
-
-                if (state == "IDLE" && last_firing_data) {
-                    displayLastFiring(last_firing_data);
-                }
 
                 // Check resume state when transitioning to IDLE
                 if (state == "IDLE" && state_last == "RUNNING") {
@@ -1686,20 +1892,25 @@ $(document).ready(function () {
                 var alertMessage = isHighTemp ? 'HIGH TEMPERATURE WARNING - ' + parseInt(x.temperature) + '°' + temp_scale_display : '';
                 updateAlertIndicator(isHighTemp, alertMessage);
             }
-
-            state_last = state;
+            } catch (err) {
+                console.error('Status handler error:', err);
+            } finally {
+                state_last = state;
+            }
         }
     };
+    });
 
     // ===================
     // Config Socket
     // ===================
 
-    ws_config.onopen = function () {
-        ws_config.send('GET');
+    ws_config = connectWebSocket("/config", function(ws) {
+    ws.onopen = function () {
+        ws.send('GET');
     };
 
-    ws_config.onmessage = function (e) {
+    ws.onmessage = function (e) {
         var x = JSON.parse(e.data);
         temp_scale = x.temp_scale;
         time_scale_slope = x.time_scale_slope;
@@ -1722,41 +1933,37 @@ $(document).ready(function () {
             case "h": time_scale_long = "Hours"; break;
         }
     };
+    });
 
     // ===================
     // Control Socket
     // ===================
 
-    ws_control.onopen = function () { };
+    ws_control = connectWebSocket("/control", function(ws) {
+    ws.onopen = function () { };
 
-    ws_control.onmessage = function (e) {
-        var x = JSON.parse(e.data);
-        var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
-        // Only add graph points if we should continue graphing
-        // Note: ws_control doesn't send state, so we check temperature against cutoff
-        // This allows graphing during cooling (when temp > cutoff) but stops when temp drops below cutoff
-        if (x.temperature >= graph_cutoff_temp) {
-            graph.live.data.push([xTime, x.temperature]);
-            graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
-        }
-    };
+    // ws_control only used for sending commands, not for graph data
+    // (graph data comes via ws_status to avoid duplicates)
+    ws.onmessage = function (e) { };
+    });
 
     // ===================
     // Storage Socket
     // ===================
 
-    ws_storage.onopen = function () {
-        ws_storage.send('GET');
+    ws_storage = connectWebSocket("/storage", function(ws) {
+    ws.onopen = function () {
+        ws.send('GET');
     };
 
-    ws_storage.onmessage = function (e) {
+    ws.onmessage = function (e) {
         var message = JSON.parse(e.data);
 
         if (message.resp) {
             if (message.resp == "FAIL") {
                 if (confirm('Profile exists. Overwrite?')) {
                     message.force = true;
-                    ws_storage.send(JSON.stringify(message));
+                    ws.send(JSON.stringify(message));
                 }
             }
             return;
@@ -1787,6 +1994,7 @@ $(document).ready(function () {
             pending_backlog = null;
         }
     };
+    });
 
     // ===================
     // UI Event Handlers
@@ -2019,6 +2227,9 @@ $(document).ready(function () {
 
     // Initialize graph
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    // Initialize crosshair indicator
+    initCrosshair();
 
     // Re-check profile name truncation on window resize
     var resizeTimer;

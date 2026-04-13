@@ -385,8 +385,8 @@
    ============================================ */
 
 .alert-indicator {
-  width: 60px;
-  height: 60px;
+  width: clamp(36px, 5vw, 50px);
+  height: clamp(36px, 5vw, 50px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -395,8 +395,8 @@
 }
 
 .alert-indicator svg {
-  width: 48px;
-  height: 48px;
+  width: clamp(28px, 4vw, 40px);
+  height: clamp(28px, 4vw, 40px);
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
   transition: filter 0.15s ease, transform 0.15s ease;
 }

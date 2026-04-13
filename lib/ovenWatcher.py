@@ -10,6 +10,7 @@ class OvenWatcher(threading.Thread):
         self.recording = False
         self.observers = []
         self.adjusted_profile_data = None
+        self.mqtt_client = None
         threading.Thread.__init__(self)
         self.daemon = True
         self.oven = oven
@@ -54,9 +55,12 @@ class OvenWatcher(threading.Thread):
         
         # Compute adjusted profile curve starting from the kiln's actual temperature.
         # Stored separately so we never mutate the original profile object.
+        # On resume, skip already-completed segments so the curve doesn't dip
+        # back through earlier (lower) temperature targets.
         actual_temp = first_state.get('temperature', profile.start_temp)
+        from_segment = getattr(self.oven, 'current_segment_index', 0)
         if hasattr(profile, 'segments') and profile.segments:
-            self.adjusted_profile_data = profile.to_legacy_format(start_temp=actual_temp)
+            self.adjusted_profile_data = profile.to_legacy_format(start_temp=actual_temp, from_segment=from_segment)
         elif profile.data and len(profile.data) > 0:
             self.adjusted_profile_data = [[0, actual_temp]] + [list(pt) for pt in profile.data[1:]]
         else:
@@ -113,3 +117,6 @@ class OvenWatcher(threading.Thread):
                     self.observers.remove(wsock)
             else:
                 self.observers.remove(wsock)
+
+        if self.mqtt_client and isinstance(message, dict):
+            self.mqtt_client.publish_state(message)

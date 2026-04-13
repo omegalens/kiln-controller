@@ -434,7 +434,9 @@
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  padding: var(--spacing-md) 0;
+  justify-items: center;
+  gap: 0 clamp(8px, 2vw, 16px);
+  padding: var(--spacing-md) var(--spacing-sm);
 }
 
 .controls-left {
@@ -452,12 +454,12 @@
 }
 
 .btn-control {
-  width: 80px;
-  height: 80px;
+  width: clamp(56px, 7vw, 76px);
+  height: clamp(56px, 7vw, 76px);
   border-radius: 50%;
   border: none;
   font-family: var(--font-ui);
-  font-size: var(--text-sm);
+  font-size: clamp(9px, 1.2vw, 12px);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -503,9 +505,9 @@
 .btn-resume {
   background: linear-gradient(145deg, #3498db, #2980b9);
   color: white;
-  width: 40px;
-  height: 40px;
-  font-size: 0.45rem;
+  width: clamp(38px, 5vw, 50px);
+  height: clamp(38px, 5vw, 50px);
+  font-size: clamp(7px, 0.9vw, 9px);
 }
 
 .btn-resume:hover {
@@ -1020,4 +1022,69 @@
 .metric-input[type=number] {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* ============================================
+   GRAPH CROSSHAIR INDICATOR
+   ============================================ */
+
+.crosshair-line {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: var(--text-muted);
+  opacity: 0.6;
+  pointer-events: none;
+  display: none;
+  z-index: 5;
+}
+
+.crosshair-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #e67e22;
+  background: rgba(230, 126, 34, 0.3);
+  pointer-events: none;
+  display: none;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+}
+
+.crosshair-dot.on-profile {
+  border-color: #27ae60;
+  background: rgba(39, 174, 96, 0.3);
+}
+
+.crosshair-info {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 6px 10px;
+  background: rgba(30, 30, 30, 0.92);
+  border: 1px solid var(--border-widget);
+  border-radius: 6px;
+  pointer-events: none;
+  display: none;
+  z-index: 7;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.crosshair-info-row {
+  font-family: var(--font-display);
+}
+
+.crosshair-info-row.actual {
+  color: #e67e22;
+}
+
+.crosshair-info-row.setpoint {
+  color: #27ae60;
+}
+
+.crosshair-info-row.time {
+  color: var(--text-primary);
 }

@@ -40,6 +40,27 @@ ovenWatcher = OvenWatcher(oven)
 # this ovenwatcher is used in the oven class for restarts
 oven.set_ovenwatcher(ovenWatcher)
 
+# MQTT integration (optional)
+try:
+    if getattr(config, 'mqtt_enabled', False):
+        from mqtt import MQTTClient
+        mqtt_client = MQTTClient(
+            oven,
+            host=getattr(config, 'mqtt_host', 'localhost'),
+            port=getattr(config, 'mqtt_port', 1883),
+            topic_prefix=getattr(config, 'mqtt_topic_prefix', 'kiln'),
+            publish_interval=getattr(config, 'mqtt_publish_interval', 2),
+            username=getattr(config, 'mqtt_username', None),
+            password=getattr(config, 'mqtt_password', None),
+        )
+        if mqtt_client.start():
+            ovenWatcher.mqtt_client = mqtt_client
+            log.info("MQTT integration active")
+        else:
+            log.warning("MQTT client failed to start")
+except Exception as e:
+    log.error("MQTT setup failed: %s" % e)
+
 @app.route('/')
 def index():
     return bottle.redirect('/picoreflow/index.html')
@@ -199,19 +220,10 @@ def handle_control():
                     if profile_obj:
                         profile_json = json.dumps(profile_obj)
                         profile = Profile(profile_json)
-                    oven.run_profile(profile)
-                    ovenWatcher.record(profile)
-                elif msgdict.get("cmd") == "SIMULATE":
-                    log.info("SIMULATE command received")
-                    #profile_obj = msgdict.get('profile')
-                    #if profile_obj:
-                    #    profile_json = json.dumps(profile_obj)
-                    #    profile = Profile(profile_json)
-                    #simulated_oven = Oven(simulate=True, time_step=0.05)
-                    #simulation_watcher = OvenWatcher(simulated_oven)
-                    #simulation_watcher.add_observer(wsock)
-                    #simulated_oven.run_profile(profile)
-                    #simulation_watcher.record(profile)
+                        oven.run_profile(profile)
+                        ovenWatcher.record(profile)
+                    else:
+                        log.error("RUN command missing profile data")
                 elif msgdict.get("cmd") == "RESUME":
                     log.info("RESUME command received")
                     result = oven.resume_last_firing()
@@ -324,19 +336,38 @@ def get_profiles():
     return json.dumps(profiles)
 
 
+def sanitize_profile_name(name):
+    """Sanitize profile name to prevent path traversal attacks.
+    Strips path separators, .., and null bytes. Returns safe filename base."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Profile name must be a non-empty string")
+    # Remove null bytes, path separators, and parent directory references
+    sanitized = name.replace('\x00', '').replace('/', '').replace('\\', '')
+    # Remove any remaining ".." sequences
+    while '..' in sanitized:
+        sanitized = sanitized.replace('..', '')
+    sanitized = sanitized.strip()
+    if not sanitized:
+        raise ValueError("Profile name is empty after sanitization")
+    return sanitized
+
 def save_profile(profile, force=False):
     """Save profile to disk in Fahrenheit (standard format)"""
     # Ensure profile has temp_units
     profile = add_temp_units(profile)
-    
+
     # Convert to Fahrenheit for storage if needed (maintain F as standard)
     if profile['temp_units'] == "c":
         profile = convert_to_f(profile)
         profile['temp_units'] = "f"
-    
+
     profile_json = json.dumps(profile)
-    filename = profile['name']+".json"
+    filename = sanitize_profile_name(profile['name'])+".json"
     filepath = os.path.join(profile_path, filename)
+    # Verify the resolved path is within the profiles directory
+    if not os.path.abspath(filepath).startswith(os.path.abspath(profile_path)):
+        log.error("Path traversal attempt blocked: %s" % profile['name'])
+        return False
     if not force and os.path.exists(filepath):
         log.error("Could not write, %s already exists" % filepath)
         return False
@@ -437,10 +468,17 @@ def normalize_temp_units(profiles):
     return normalized
 
 def delete_profile(profile):
-    profile_json = json.dumps(profile)
-    filename = profile['name']+".json"
+    filename = sanitize_profile_name(profile['name'])+".json"
     filepath = os.path.join(profile_path, filename)
-    os.remove(filepath)
+    # Verify the resolved path is within the profiles directory
+    if not os.path.abspath(filepath).startswith(os.path.abspath(profile_path)):
+        log.error("Path traversal attempt blocked in delete: %s" % profile['name'])
+        return False
+    try:
+        os.remove(filepath)
+    except FileNotFoundError:
+        log.warning("Profile file not found for deletion: %s" % filepath)
+        return False
     log.info("Deleted %s" % filepath)
     return True
 

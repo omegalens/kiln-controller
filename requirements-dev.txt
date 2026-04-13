@@ -8,3 +8,4 @@ gevent
 gevent-websocket
 websocket-client
 requests
+paho-mqtt

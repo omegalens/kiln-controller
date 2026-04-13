@@ -415,3 +415,16 @@ runaway_min_temp_rise = 10 # degrees
 # Minimum seconds between saving state.json to disk
 # (Prevents SD card wear from constant writing)
 state_save_interval = 60 # seconds
+
+########################################################################
+# MQTT Integration (optional)
+# Publishes kiln status and accepts limited commands (stop/pause/resume).
+# Requires paho-mqtt: pip install paho-mqtt
+# Set mqtt_enabled = True to activate.
+mqtt_enabled = False
+mqtt_host = "localhost"
+mqtt_port = 1883
+mqtt_topic_prefix = "kiln"
+mqtt_publish_interval = 2   # seconds between MQTT publishes
+mqtt_username = None
+mqtt_password = None
