@@ -1,0 +1,125 @@
+<h2>Multi-Zone Graph Layout</h2>
+<p class="subtitle">How should multiple temperature readings appear on the firing chart?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Single Graph, Overlaid Traces</h3>
+      <p>All zone temperatures as colored lines on one shared Y-axis. One target profile line. Compact, easy to compare zones at a glance. Legend identifies each zone.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Firing: Cone 6 Glaze &mdash; 3 Zones</div>
+        <div class="mockup-body" style="height:220px;position:relative;background:#1a1a2e;padding:16px;">
+          <!-- Y axis -->
+          <div style="position:absolute;left:8px;top:16px;bottom:40px;width:1px;background:#444;"></div>
+          <div style="position:absolute;left:2px;top:16px;color:#666;font-size:10px;">2200&deg;F</div>
+          <div style="position:absolute;left:2px;top:50%;color:#666;font-size:10px;">1100&deg;F</div>
+          <div style="position:absolute;left:2px;bottom:40px;color:#666;font-size:10px;">65&deg;F</div>
+          <!-- X axis -->
+          <div style="position:absolute;left:40px;right:16px;bottom:36px;height:1px;background:#444;"></div>
+          <!-- Target line (dashed) -->
+          <svg style="position:absolute;left:40px;top:16px;right:16px;bottom:40px;width:calc(100% - 56px);height:calc(100% - 56px);" viewBox="0 0 400 160" preserveAspectRatio="none">
+            <polyline points="0,155 100,80 200,40 280,40 320,10 400,10" fill="none" stroke="#ffffff" stroke-width="2" stroke-dasharray="6,4" opacity="0.5"/>
+            <!-- Zone 1 - red -->
+            <polyline points="0,155 80,90 180,48 270,45 310,16 380,14" fill="none" stroke="#ff6b6b" stroke-width="2"/>
+            <!-- Zone 2 - blue -->
+            <polyline points="0,153 85,95 185,52 275,48 315,20 385,17" fill="none" stroke="#4ecdc4" stroke-width="2"/>
+            <!-- Zone 3 - yellow -->
+            <polyline points="0,158 90,100 190,55 280,50 325,22 390,19" fill="none" stroke="#ffe66d" stroke-width="2"/>
+          </svg>
+          <!-- Legend -->
+          <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);display:flex;gap:16px;font-size:11px;">
+            <span><span style="color:#ff6b6b;">&#9644;</span> Zone 1 (Top)</span>
+            <span><span style="color:#4ecdc4;">&#9644;</span> Zone 2 (Mid)</span>
+            <span><span style="color:#ffe66d;">&#9644;</span> Zone 3 (Bot)</span>
+            <span><span style="color:#fff;opacity:0.5;">- - -</span> Target</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Stacked Subplots</h3>
+      <p>Each zone gets its own mini-graph stacked vertically, sharing the same X (time) axis. More space per zone, but takes more screen real estate. Harder to visually compare zones.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Firing: Cone 6 Glaze &mdash; 3 Zones</div>
+        <div class="mockup-body" style="background:#1a1a2e;padding:12px;">
+          <!-- Zone 1 -->
+          <div style="display:flex;align-items:center;margin-bottom:4px;">
+            <span style="font-size:10px;color:#ff6b6b;width:60px;">Zone 1</span>
+            <div style="flex:1;height:50px;position:relative;border-bottom:1px solid #333;">
+              <svg style="width:100%;height:100%;" viewBox="0 0 400 50" preserveAspectRatio="none">
+                <polyline points="0,48 100,25 200,12 300,10 400,4" fill="none" stroke="#ff6b6b" stroke-width="2"/>
+                <polyline points="0,48 100,24 200,10 300,10 400,3" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+          <!-- Zone 2 -->
+          <div style="display:flex;align-items:center;margin-bottom:4px;">
+            <span style="font-size:10px;color:#4ecdc4;width:60px;">Zone 2</span>
+            <div style="flex:1;height:50px;position:relative;border-bottom:1px solid #333;">
+              <svg style="width:100%;height:100%;" viewBox="0 0 400 50" preserveAspectRatio="none">
+                <polyline points="0,48 105,28 205,14 305,12 400,6" fill="none" stroke="#4ecdc4" stroke-width="2"/>
+                <polyline points="0,48 100,24 200,10 300,10 400,3" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+          <!-- Zone 3 -->
+          <div style="display:flex;align-items:center;">
+            <span style="font-size:10px;color:#ffe66d;width:60px;">Zone 3</span>
+            <div style="flex:1;height:50px;position:relative;border-bottom:1px solid #333;">
+              <svg style="width:100%;height:100%;" viewBox="0 0 400 50" preserveAspectRatio="none">
+                <polyline points="0,48 110,32 210,18 310,14 400,8" fill="none" stroke="#ffe66d" stroke-width="2"/>
+                <polyline points="0,48 100,24 200,10 300,10 400,3" fill="none" stroke="#fff" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+          <div style="text-align:center;font-size:10px;color:#666;margin-top:4px;">Time &rarr;</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Single Graph + Zone Summary Panel</h3>
+      <p>Overlaid traces like A, but with a sidebar/panel showing each zone's current temp, target, deviation, and heat output as cards. Best of both worlds &mdash; the graph stays clean while the panel gives per-zone detail.</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-header">Firing: Cone 6 Glaze &mdash; 3 Zones</div>
+        <div class="mockup-body" style="display:flex;gap:12px;background:#1a1a2e;padding:12px;">
+          <!-- Graph -->
+          <div style="flex:2;height:180px;position:relative;">
+            <svg style="width:100%;height:100%;" viewBox="0 0 300 150" preserveAspectRatio="none">
+              <polyline points="0,145 75,70 150,35 225,35 300,8" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="5,3" opacity="0.4"/>
+              <polyline points="0,145 70,78 145,40 220,38 295,12" fill="none" stroke="#ff6b6b" stroke-width="2"/>
+              <polyline points="0,143 73,82 148,44 223,42 298,15" fill="none" stroke="#4ecdc4" stroke-width="2"/>
+              <polyline points="0,148 78,88 153,48 228,46 300,18" fill="none" stroke="#ffe66d" stroke-width="2"/>
+            </svg>
+          </div>
+          <!-- Zone panel -->
+          <div style="flex:1;display:flex;flex-direction:column;gap:8px;font-size:11px;">
+            <div style="background:#2a2a3e;border-radius:6px;padding:8px;border-left:3px solid #ff6b6b;">
+              <div style="color:#ff6b6b;font-weight:bold;">Zone 1 (Top)</div>
+              <div style="color:#ccc;">2156&deg;F <span style="color:#666;">/ 2167&deg;F</span></div>
+              <div style="color:#888;font-size:10px;">Heat: 72% | &Delta; -11&deg;</div>
+            </div>
+            <div style="background:#2a2a3e;border-radius:6px;padding:8px;border-left:3px solid #4ecdc4;">
+              <div style="color:#4ecdc4;font-weight:bold;">Zone 2 (Mid)</div>
+              <div style="color:#ccc;">2149&deg;F <span style="color:#666;">/ 2167&deg;F</span></div>
+              <div style="color:#888;font-size:10px;">Heat: 78% | &Delta; -18&deg;</div>
+            </div>
+            <div style="background:#2a2a3e;border-radius:6px;padding:8px;border-left:3px solid #ffe66d;">
+              <div style="color:#ffe66d;font-weight:bold;">Zone 3 (Bot)</div>
+              <div style="color:#ccc;">2139&deg;F <span style="color:#666;">/ 2167&deg;F</span></div>
+              <div style="color:#888;font-size:10px;">Heat: 85% | &Delta; -28&deg;</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
