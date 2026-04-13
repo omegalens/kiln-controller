@@ -1,0 +1,463 @@
+/*
+ * Kiln Controller Dashboard - Responsive Styles
+ * Widgets reflow at breakpoints, don't scale internally
+ */
+
+/* ============================================
+   LARGE TABLETS / SMALL DESKTOPS (< 1200px)
+   ============================================ */
+
+@media (max-width: 1199px) {
+
+  /* Graph full width on top, Profiles + Insights side by side below */
+
+  .widget-graph {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .widget-profiles {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: stretch;
+    max-height: none !important;
+    height: 100%;
+  }
+
+  .widget-insights {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: stretch;
+    height: 100%;
+  }
+
+  /* Metrics grid adapts to narrower widget */
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .controls {
+    padding: var(--spacing-sm) var(--spacing-xs);
+    gap: 0 clamp(6px, 1.5vw, 12px);
+  }
+
+  .confirm-panel {
+    min-width: 200px;
+  }
+}
+
+/* ============================================
+   TABLETS (< 900px)
+   ============================================ */
+
+@media (max-width: 899px) {
+
+  /* Two column layout - profiles left, insights right */
+
+  .status-header {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--spacing-md);
+  }
+
+  .status-leds {
+    order: 2;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .status-state {
+    order: 1;
+  }
+
+  /* Profiles widget vertical scrolling list */
+  .widget-profiles .widget-content {
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: var(--spacing-sm);
+  }
+
+  .profile-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+  }
+
+  .profile-item {
+    flex-shrink: 0;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--spacing-sm);
+  }
+
+  .profile-bar-container {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .profile-actions {
+    justify-content: center;
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  /* Graph area sizing */
+  #graph_container {
+    height: 240px;
+  }
+
+  /* Metrics back to 2 columns */
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+    min-width: auto;
+  }
+
+  /* Controls horizontal on tablet */
+  .controls-center {
+    justify-content: center;
+  }
+
+  /* Gallery horizontal scroll */
+  .gallery-card {
+    width: 160px;
+  }
+}
+
+/* ============================================
+   SMALL TABLETS / LARGE PHONES (< 600px)
+   ============================================ */
+
+@media (max-width: 599px) {
+
+  body.kiln-dashboard {
+    padding: var(--spacing-sm);
+  }
+
+  /* Header more compact */
+  .status-header {
+    padding: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+  }
+
+  .led {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+
+  .led::after {
+    font-size: 8px;
+    bottom: -16px;
+  }
+
+  /* Widget titles smaller */
+  .widget-title {
+    font-size: var(--text-xs);
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+
+  /* Profiles list items fill container width */
+  .profile-item {
+    width: 100%;
+    padding: var(--spacing-sm);
+  }
+
+  .profile-name {
+    font-size: var(--text-xs);
+  }
+
+  /* Graph stats stacked */
+  .graph-stats {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-sm);
+  }
+
+  .graph-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    text-align: left;
+  }
+
+  .graph-stat-label {
+    margin-bottom: 0;
+  }
+
+  /* Metrics single column on small screens */
+  .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    text-align: left;
+  }
+
+  .metric-label {
+    margin-bottom: 0;
+    flex: 1;
+  }
+
+  .metric-value {
+    font-size: var(--text-2xl);
+    margin-bottom: 0;
+    margin-right: var(--spacing-xs);
+  }
+
+  /* Control buttons scale down smoothly via clamp in base styles;
+     tighten the padding at this breakpoint */
+  .controls {
+    padding: var(--spacing-sm) var(--spacing-xs);
+    gap: 0 var(--spacing-sm);
+  }
+
+  .btn-control {
+    width: clamp(52px, 12vw, 66px);
+    height: clamp(52px, 12vw, 66px);
+    font-size: var(--text-xs);
+  }
+
+  .btn-resume {
+    width: clamp(34px, 8vw, 42px);
+    height: clamp(34px, 8vw, 42px);
+  }
+
+  /* Gallery narrower cards */
+  .gallery-card {
+    width: 140px;
+  }
+
+  /* Confirm panel full width actions */
+  .confirm-actions {
+    flex-direction: column;
+  }
+}
+
+/* ============================================
+   PHONES (< 480px)
+   ============================================ */
+
+@media (max-width: 479px) {
+
+  body.kiln-dashboard {
+    padding: var(--spacing-xs);
+  }
+
+  .dashboard-grid {
+    gap: var(--spacing-sm);
+  }
+
+  /* Smaller LEDs */
+  .led {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    border-radius: 6px;
+  }
+
+  .led::after {
+    font-size: 7px;
+    bottom: -14px;
+  }
+
+  /* Profile items minimal */
+  .profile-item {
+    width: 120px;
+  }
+
+  /* Graph smaller */
+  #graph_container {
+    height: 200px;
+  }
+
+  /* Metric values smaller */
+  .metric-value {
+    font-size: var(--text-xl);
+  }
+
+  /* Control buttons */
+  .controls {
+    gap: 0 var(--spacing-xs);
+    padding: var(--spacing-sm) var(--spacing-xs);
+  }
+
+  .btn-control {
+    width: clamp(48px, 14vw, 60px);
+    height: clamp(48px, 14vw, 60px);
+    font-size: 9px;
+  }
+
+  .btn-resume {
+    width: clamp(30px, 9vw, 38px);
+    height: clamp(30px, 9vw, 38px);
+    font-size: 7px;
+  }
+
+  /* Form inputs */
+  .form-input,
+  .form-select {
+    font-size: 16px;
+    /* Prevents iOS zoom */
+  }
+}
+
+/* ============================================
+   VERY SMALL PHONES (< 360px)
+   ============================================ */
+
+@media (max-width: 359px) {
+
+  .status-leds {
+    gap: var(--spacing-xs);
+  }
+
+  .led {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+
+  .profile-item {
+    width: 100px;
+  }
+
+  #graph_container {
+    height: 180px;
+  }
+
+  .controls {
+    gap: 0 var(--spacing-xs);
+    padding: var(--spacing-xs);
+  }
+
+  .btn-control {
+    width: 48px;
+    height: 48px;
+    font-size: 8px;
+  }
+
+  .btn-resume {
+    width: 28px;
+    height: 28px;
+    font-size: 6px;
+  }
+}
+
+/* ============================================
+   LANDSCAPE PHONE ADJUSTMENTS
+   ============================================ */
+
+@media (max-height: 500px) and (orientation: landscape) {
+
+  body.kiln-dashboard {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .status-header {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+  }
+
+  #graph_container {
+    height: 160px;
+  }
+
+  .controls {
+    padding: var(--spacing-xs) 0;
+    gap: 0 var(--spacing-xs);
+  }
+
+  .btn-control {
+    width: 46px;
+    height: 46px;
+    font-size: 8px;
+  }
+
+  .btn-resume {
+    width: 28px;
+    height: 28px;
+    font-size: 6px;
+  }
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --border-widget: #555;
+    --border-subtle: #444;
+    --text-muted: #999;
+  }
+}
+
+/* ============================================
+   TOUCH DEVICE OPTIMIZATIONS
+   ============================================ */
+
+@media (hover: none) and (pointer: coarse) {
+
+  /* Larger touch targets */
+  .btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .profile-item {
+    min-height: 44px;
+  }
+
+  /* Remove hover effects that don't work on touch */
+  .btn:hover {
+    transform: none;
+  }
+
+  .btn:active {
+    transform: scale(0.95);
+  }
+
+  .profile-item:hover {
+    background: var(--bg-widget-inset);
+  }
+
+  .profile-item:active {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+
+@media print {
+  body.kiln-dashboard {
+    background: white;
+    color: black;
+  }
+
+  .widget {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+
+  .controls,
+  .profile-actions,
+  .confirm-panel {
+    display: none;
+  }
+}

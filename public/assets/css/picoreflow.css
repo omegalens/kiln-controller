@@ -73,7 +73,7 @@ body {
     font-size: 10px;
     height: 18px;
     line-height: 18px;
-    width: 110px;
+    width: 90px;
     border-right: 1px solid #b9b6af;
     vertical-align: top;
     text-align: center;
@@ -82,11 +82,16 @@ body {
 }
 
 .ds-num {
-    width: 110px;
+    width: 90px;
     font-family: "Digi";
     border-right: 1px solid #b9b6af;
     white-space: nowrap;
     text-shadow: 0 0 25px rgba(0, 0, 0, 1);
+}
+
+.ds-elapsed {
+    font-size: 28px;
+    letter-spacing: -1px;
 }
 
 .ds-input {

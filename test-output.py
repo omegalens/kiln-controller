@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import config
 import adafruit_max31855
 import digitalio

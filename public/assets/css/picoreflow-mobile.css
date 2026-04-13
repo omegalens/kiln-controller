@@ -26,9 +26,14 @@
     
     .ds-num {
         width: 33.33% !important;  /* 3 columns on tablets */
-        min-width: 110px;
+        min-width: 90px;
         box-sizing: border-box;
         padding: 5px 3px;
+    }
+    
+    /* Hide set rate column on tablet to save space */
+    .ds-setrate {
+        display: none !important;
     }
     
     /* Adjust unit text sizing for better fit on mobile */
@@ -368,6 +373,12 @@
         width: 50% !important;
         min-width: 130px;
         padding: 8px 3px;
+    }
+    
+    /* Hide set rate and elapsed on phones to save space */
+    .ds-setrate,
+    .ds-elapsed {
+        display: none !important;
     }
     
     /* Further reduce unit font size for small tablets/phones */

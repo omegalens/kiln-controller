@@ -1,833 +1,2242 @@
+// =============================================================================
+// Kiln Controller - Main JavaScript
+// Dark theme dashboard with modular widgets
+// =============================================================================
+
 var state = "IDLE";
 var state_last = "";
-var graph = [ 'profile', 'live'];
+var edit_mode = false;
+var graph = ['profile', 'live'];
 var points = [];
 var profiles = [];
 var time_mode = 0;
 var selected_profile = 0;
 var selected_profile_name = 'cone-05-long-bisque.json';
-var temp_scale = "c";
+var firing_profile_name = null; // Track the profile currently being fired
+var temp_scale = "f";  // Default to Fahrenheit to match config.py default
 var time_scale_slope = "s";
 var time_scale_profile = "h";
 var time_scale_long = "Seconds";
-var temp_scale_display = "C";
+var temp_scale_display = "F";  // Default to Fahrenheit to match config.py default
 var kwh_rate = 0.26;
 var kw_elements = 9.460;
 var currency_type = "EUR";
-var last_firing_data = null;
+var is_sim_mode = false;
+var graph_cutoff_temp = 100; // Default cutoff temperature for graphing after firing completes
 
+// Heat glow effect state
+var glow_intensity = 0;           // 0 to 1 scale
+var glow_target = 0;              // Target intensity (1 when heat on, 0 when off)
+var glow_animation_frame = null;  // Animation frame reference
+var heat_on = false;              // Current heat state
+
+// Alert indicator state
+var alert_active = false;
+var alert_message = '';
+
+// V2 profile format (rate-based segments)
+var profile_version = 1;
+var profile_segments = [];
+var profile_start_temp = 65;
+var use_v2_editor = true;
+
+// Adjusted profile data for the active firing (received from backend)
+var firing_profile_data = null;
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Helper function to determine if we should continue graphing
+// Returns true if we should add data points, false otherwise
+function shouldContinueGraphing(currentState, currentTemp) {
+    // Always graph when actively running
+    if (currentState == "RUNNING") {
+        return true;
+    }
+    // After firing completes (IDLE), continue graphing during cooling
+    // but stop when temperature drops below cutoff
+    if (currentState == "IDLE") {
+        return currentTemp >= graph_cutoff_temp;
+    }
+    // Don't graph for other states
+    return false;
+}
+
+// Store pending backlog data until profiles are loaded
+var pending_backlog = null;
+
+// WebSocket setup
 var protocol = 'ws:';
 if (window.location.protocol == 'https:') {
     protocol = 'wss:';
 }
 var host = "" + protocol + "//" + window.location.hostname + ":" + window.location.port;
 
-// #region agent log
-console.log("[DEBUG-A] protocol=" + protocol + " hostname=" + window.location.hostname + " port=" + window.location.port + " host=" + host);
-// #endregion
+var ws_status = null;
+var ws_control = null;
+var ws_config = null;
+var ws_storage = null;
 
-var ws_status = new WebSocket(host+"/status");
-var ws_control = new WebSocket(host+"/control");
-var ws_config = new WebSocket(host+"/config");
-var ws_storage = new WebSocket(host+"/storage");
+if (window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;
 
-// #region agent log
-console.log("[DEBUG-D] WebSockets created: status=" + ws_status.url + " control=" + ws_control.url);
-ws_status.onerror = function(e) { console.error("[DEBUG-E] ws_status ERROR readyState=" + ws_status.readyState); };
-ws_control.onerror = function(e) { console.error("[DEBUG-E] ws_control ERROR readyState=" + ws_control.readyState); };
-ws_config.onerror = function(e) { console.error("[DEBUG-E] ws_config ERROR readyState=" + ws_config.readyState); };
-ws_storage.onerror = function(e) { console.error("[DEBUG-E] ws_storage ERROR readyState=" + ws_storage.readyState); };
-// #endregion
-
-
-if(window.webkitRequestAnimationFrame) window.requestAnimationFrame = window.webkitRequestAnimationFrame;
-
-graph.profile =
-{
+// Graph series configuration - dark theme colors
+graph.profile = {
     label: "Profile",
     data: [],
     points: { show: false },
-    color: "#75890c",
-    draggable: false
+    color: "#27ae60",  // Green for target/setpoint
+    draggable: false,
+    lines: { lineWidth: 2 }
 };
 
-graph.live =
-{
+graph.live = {
     label: "Live",
     data: [],
     points: { show: false },
-    color: "#d8d3c5",
-    draggable: false
+    color: "#e67e22",  // Orange for actual
+    draggable: false,
+    lines: { lineWidth: 2 }
 };
 
+// =============================================================================
+// Temperature Color & Duration Width Helpers
+// =============================================================================
 
-function updateProfile(id)
-{
+/**
+ * Get color for temperature bar based on peak temp (°F)
+ * Very Low: < 1200°F → blue
+ * Low: 1900°F → yellow
+ * Mid: 2180°F → orange
+ * High: 2400°F → red
+ */
+function getTempColor(tempF) {
+    var stops = [
+        { temp: 1200, color: [52, 152, 219] },   // blue
+        { temp: 1900, color: [241, 196, 15] },   // yellow
+        { temp: 2180, color: [230, 126, 34] },   // orange
+        { temp: 2400, color: [231, 76, 60] }     // red
+    ];
+
+    if (tempF <= stops[0].temp) return 'rgb(' + stops[0].color.join(',') + ')';
+    if (tempF >= stops[3].temp) return 'rgb(' + stops[3].color.join(',') + ')';
+
+    for (var i = 0; i < stops.length - 1; i++) {
+        if (tempF >= stops[i].temp && tempF <= stops[i + 1].temp) {
+            var ratio = (tempF - stops[i].temp) / (stops[i + 1].temp - stops[i].temp);
+            var r = Math.round(stops[i].color[0] + (stops[i + 1].color[0] - stops[i].color[0]) * ratio);
+            var g = Math.round(stops[i].color[1] + (stops[i + 1].color[1] - stops[i].color[1]) * ratio);
+            var b = Math.round(stops[i].color[2] + (stops[i + 1].color[2] - stops[i].color[2]) * ratio);
+            return 'rgb(' + r + ',' + g + ',' + b + ')';
+        }
+    }
+    return 'rgb(' + stops[2].color.join(',') + ')';
+}
+
+/**
+ * Get bar width percentage based on duration
+ * 3h = 20% (minimum visible), 18h = 100%
+ */
+function getDurationWidth(durationHours) {
+    var minHours = 3;
+    var maxHours = 18;
+    var minWidth = 20;
+    var maxWidth = 100;
+
+    var clamped = Math.max(minHours, Math.min(maxHours, durationHours));
+    return ((clamped - minHours) / (maxHours - minHours)) * (maxWidth - minWidth) + minWidth;
+}
+
+/**
+ * Get peak temperature from profile
+ */
+function getProfilePeakTemp(profile) {
+    var peakTemp = 0;
+
+    if (isV2Profile(profile)) {
+        var segments = profile.segments || [];
+        for (var i = 0; i < segments.length; i++) {
+            if (segments[i].target > peakTemp) {
+                peakTemp = segments[i].target;
+            }
+        }
+    } else {
+        var data = profile.data || [];
+        for (var i = 0; i < data.length; i++) {
+            if (data[i][1] > peakTemp) {
+                peakTemp = data[i][1];
+            }
+        }
+    }
+
+    return peakTemp;
+}
+
+/**
+ * Get duration in hours from profile
+ */
+function getProfileDuration(profile) {
+    var displayData;
+    if (isV2Profile(profile)) {
+        displayData = segmentsToLegacy(profile.start_temp || 65, profile.segments || []);
+    } else {
+        displayData = profile.data || [];
+    }
+
+    if (displayData.length === 0) return 0;
+    var totalSeconds = displayData[displayData.length - 1][0];
+    return totalSeconds / 3600;
+}
+
+// =============================================================================
+// Profile List Rendering
+// =============================================================================
+
+function renderProfileList() {
+    var $list = $('#profile-list');
+    $list.empty();
+
+    // Sort profiles by peak temperature (highest first)
+    var sortedIndices = [];
+    for (var i = 0; i < profiles.length; i++) {
+        sortedIndices.push(i);
+    }
+    sortedIndices.sort(function (a, b) {
+        return getProfilePeakTemp(profiles[b]) - getProfilePeakTemp(profiles[a]);
+    });
+
+    for (var j = 0; j < sortedIndices.length; j++) {
+        var i = sortedIndices[j];
+        var profile = profiles[i];
+        var peakTemp = getProfilePeakTemp(profile);
+        var durationHours = getProfileDuration(profile);
+        var tempColor = getTempColor(peakTemp);
+        var barWidth = getDurationWidth(durationHours);
+
+        var isSelected = (i === selected_profile);
+        var isFiring = (firing_profile_name !== null && profile.name === firing_profile_name);
+        var itemClass = 'profile-item';
+        if (isFiring) itemClass += ' firing';
+        if (isSelected) itemClass += ' selected';
+
+        var html = '<li class="' + itemClass + '" data-index="' + i + '">';
+        html += '<span class="profile-name"><span class="profile-name-text">' + escapeHtml(profile.name) + '</span></span>';
+        html += '<div class="profile-bar-container">';
+        html += '<div class="profile-bar" style="width: ' + barWidth + '%; background-color: ' + tempColor + ';"></div>';
+        html += '</div>';
+        html += '</li>';
+
+        $list.append(html);
+    }
+
+    // Bind click events
+    $('.profile-item').on('click', function () {
+        var index = $(this).data('index');
+        selectProfile(index);
+    });
+
+    // Check for truncated names and apply marquee
+    updateProfileTruncation();
+}
+
+/**
+ * Check each profile name for text overflow and apply .truncated class
+ * Also calculates the marquee scroll distance for the animation
+ */
+function updateProfileTruncation() {
+    $('.profile-item').each(function () {
+        var $item = $(this);
+        var $name = $item.find('.profile-name');
+        var $nameText = $item.find('.profile-name-text');
+
+        // Temporarily remove truncated class to measure true width
+        $item.removeClass('truncated');
+
+        // Get the container width and text width
+        var containerWidth = $name.width();
+        var textWidth = $nameText[0].scrollWidth;
+
+        if (textWidth > containerWidth) {
+            $item.addClass('truncated');
+            // Calculate scroll distance (negative because we scroll left)
+            var distance = -(textWidth - containerWidth + 20); // 20px extra padding
+            $item.css('--marquee-distance', distance + 'px');
+        }
+    });
+}
+
+function selectProfile(index) {
+    selected_profile = index;
+    selected_profile_name = profiles[index].name;
+
+    // Clear previous firing data when selecting a profile (only if not currently firing)
+    if (state !== "RUNNING") {
+        firing_profile_data = null;
+        graph.live.data = [];
+    }
+
+    // Update visual selection
+    $('.profile-item').removeClass('selected');
+    $('.profile-item[data-index="' + index + '"]').addClass('selected');
+
+    // Re-check truncation since bar is now hidden on selected item
+    updateProfileTruncation();
+
+    updateProfile(index);
+
+    // Show/hide resume button based on whether this profile matches the aborted one
+    updateResumeButtonVisibility();
+}
+
+function updateProfile(id) {
     selected_profile = id;
     selected_profile_name = profiles[id].name;
-    var job_seconds = profiles[id].data.length === 0 ? 0 : parseInt(profiles[id].data[profiles[id].data.length-1][0]);
+
+    var profile = profiles[id];
+    var displayData;
+    if (isV2Profile(profile)) {
+        displayData = segmentsToLegacy(profile.start_temp || 65, profile.segments || []);
+    } else {
+        displayData = profile.data || [];
+    }
+
+    var job_seconds = displayData.length === 0 ? 0 : parseInt(displayData[displayData.length - 1][0]);
     var kwh = (kw_elements * job_seconds / 3600).toFixed(2);
-    var cost =  (kwh*kwh_rate).toFixed(2);
+    var cost = (kwh * kwh_rate).toFixed(2);
     var job_time = new Date(job_seconds * 1000).toISOString().substr(11, 8);
-    $('#sel_prof').html(profiles[id].name);
+
+    $('#sel_prof').text(profiles[id].name);
     $('#sel_prof_eta').html(job_time);
-    $('#sel_prof_cost').html(kwh + ' kWh ('+ currency_type +': '+ cost +')');
-    graph.profile.data = profiles[id].data;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+    $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + ': ' + cost + ')');
+
+    graph.profile.data = displayData;
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 }
 
-function deleteProfile()
-{
-    var profile = { "type": "profile", "data": "", "name": selected_profile_name };
-    var delete_struct = { "cmd": "DELETE", "profile": profile };
+// =============================================================================
+// Progress Bar
+// =============================================================================
 
-    var delete_cmd = JSON.stringify(delete_struct);
-    console.log("Delete profile:" + selected_profile_name);
-
-    ws_storage.send(delete_cmd);
-
-    ws_storage.send('GET');
-    selected_profile_name = profiles[0].name;
-
-    state="IDLE";
-    $('#edit').hide();
-    $('#profile_selector').show();
-    $('#btn_controls').show();
-    $('#status').slideDown();
-    $('#profile_table').slideUp();
-    $('#e2').select2('val', 0);
-    graph.profile.points.show = false;
-    graph.profile.draggable = false;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-}
-
-
-function updateProgress(percentage)
-{
-    if(state=="RUNNING")
-    {
-        if(percentage > 100) percentage = 100;
-        $('#progressBar').css('width', percentage+'%');
-        if(percentage>5) $('#progressBar').html(parseInt(percentage)+'%');
-    }
-    else
-    {
-        $('#progressBar').css('width', 0+'%');
-        $('#progressBar').html('');
+function updateProgress(percentage) {
+    if (state == "RUNNING") {
+        if (percentage > 100) percentage = 100;
+        $('#progressBar').css('width', percentage + '%');
+        $('#progress-text').text(parseInt(percentage) + '%');
+    } else {
+        $('#progressBar').css('width', '0%');
+        $('#progress-text').text('0%');
     }
 }
 
-function updateProfileTable()
-{
+// =============================================================================
+// Profile Table (V1 - Legacy)
+// =============================================================================
+
+function updateProfileTable() {
     var dps = 0;
     var slope = "";
     var color = "";
 
-    var html = '<h3>Schedule Points</h3><div class="table-responsive" style="scroll: none"><table class="table table-striped">';
-        html += '<tr><th style="width: 50px">#</th><th>Target Time in ' + time_scale_long+ '</th><th>Target Temperature in °'+temp_scale_display+'</th><th>Slope in &deg;'+temp_scale_display+'/'+time_scale_slope+'</th><th></th></tr>';
+    var html = '<h3 class="text-secondary mt-md">Schedule Points</h3>';
+    html += '<div class="table-responsive"><table class="segment-table">';
+    html += '<tr><th>#</th><th>Time (' + time_scale_long + ')</th><th>Temp (°' + temp_scale_display + ')</th><th>Rate</th><th></th></tr>';
 
-    for(var i=0; i<graph.profile.data.length;i++)
-    {
+    for (var i = 0; i < graph.profile.data.length; i++) {
+        if (i >= 1) dps = ((graph.profile.data[i][1] - graph.profile.data[i - 1][1]) / (graph.profile.data[i][0] - graph.profile.data[i - 1][0]) * 10) / 10;
 
-        if (i>=1) dps =  ((graph.profile.data[i][1]-graph.profile.data[i-1][1])/(graph.profile.data[i][0]-graph.profile.data[i-1][0]) * 10) / 10;
-        if (dps  > 0) { slope = "up";     color="rgba(206, 5, 5, 1)"; } else
-        if (dps  < 0) { slope = "down";   color="rgba(23, 108, 204, 1)"; dps *= -1; } else
-        if (dps == 0) { slope = "right";  color="grey"; }
+        if (dps > 0) { slope = "↑"; color = "var(--accent-danger)"; }
+        else if (dps < 0) { slope = "↓"; color = "var(--led-cool)"; dps *= -1; }
+        else { slope = "→"; color = "var(--text-muted)"; }
 
-        html += '<tr><td><h4>' + (i+1) + '</h4></td>';
-        html += '<td><input type="text" class="form-control" id="profiletable-0-'+i+'" value="'+ timeProfileFormatter(graph.profile.data[i][0],true) + '" style="width: 60px" /></td>';
-        html += '<td><input type="text" class="form-control" id="profiletable-1-'+i+'" value="'+ graph.profile.data[i][1] + '" style="width: 60px" /></td>';
-        html += '<td><div class="input-group"><span class="glyphicon glyphicon-circle-arrow-' + slope + ' input-group-addon ds-trend" style="background: '+color+'"></span><input type="text" class="form-control ds-input" readonly value="' + formatDPS(dps) + '" style="width: 100px" /></div></td>';
-        html += '<td>&nbsp;</td></tr>';
+        html += '<tr>';
+        html += '<td>' + (i + 1) + '</td>';
+        html += '<td><input type="text" class="form-input form-input-sm" id="profiletable-0-' + i + '" value="' + timeProfileFormatter(graph.profile.data[i][0], true) + '" /></td>';
+        html += '<td><input type="text" class="form-input form-input-sm" id="profiletable-1-' + i + '" value="' + graph.profile.data[i][1] + '" /></td>';
+        html += '<td><span style="color: ' + color + '">' + slope + ' ' + formatDPS(dps) + '</span></td>';
+        html += '<td></td></tr>';
     }
 
     html += '</table></div>';
 
     $('#profile_table').html(html);
 
-    //Link table to graph
-    $(".form-control").change(function(e)
-        {
-            var id = $(this)[0].id; //e.currentTarget.attributes.id
-            var value = parseInt($(this)[0].value);
-            var fields = id.split("-");
-            var col = parseInt(fields[1]);
-            var row = parseInt(fields[2]);
+    $(".form-input").change(function (e) {
+        var id = $(this)[0].id;
+        var value = parseInt($(this)[0].value);
+        var fields = id.split("-");
+        var col = parseInt(fields[1]);
+        var row = parseInt(fields[2]);
 
-            if (graph.profile.data.length > 0) {
+        if (graph.profile.data.length > 0) {
             if (col == 0) {
-                graph.profile.data[row][col] = timeProfileFormatter(value,false);
-            }
-            else {
+                graph.profile.data[row][col] = timeProfileFormatter(value, false);
+            } else {
                 graph.profile.data[row][col] = value;
             }
-
-            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-            }
-            updateProfileTable();
-
-        });
+            graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+        }
+        updateProfileTable();
+    });
 }
 
 function timeProfileFormatter(val, down) {
-    var rval = val
-    switch(time_scale_profile){
+    var rval = val;
+    switch (time_scale_profile) {
         case "m":
-            if (down) {rval = val / 60;} else {rval = val * 60;}
+            if (down) { rval = val / 60; } else { rval = val * 60; }
             break;
         case "h":
-            if (down) {rval = val / 3600;} else {rval = val * 3600;}
+            if (down) { rval = val / 3600; } else { rval = val * 3600; }
             break;
     }
     return Math.round(rval);
 }
 
+// =============================================================================
+// V2 Profile (Rate-Based Segments) Functions
+// =============================================================================
+
+function isV2Profile(profile) {
+    return profile && profile.version && profile.version >= 2;
+}
+
+function loadProfileForEditing(profile) {
+    if (isV2Profile(profile)) {
+        profile_version = 2;
+        profile_segments = profile.segments ? JSON.parse(JSON.stringify(profile.segments)) : [];
+        profile_start_temp = profile.start_temp || 65;
+    } else {
+        profile_version = 1;
+        profile_segments = legacyToSegments(profile.data);
+        profile_start_temp = profile.data && profile.data.length > 0 ? profile.data[0][1] : 65;
+    }
+}
+
+function legacyToSegments(data) {
+    var segments = [];
+    if (!data || data.length < 2) return segments;
+
+    for (var i = 1; i < data.length; i++) {
+        var prevTime = data[i - 1][0];
+        var prevTemp = data[i - 1][1];
+        var currTime = data[i][0];
+        var currTemp = data[i][1];
+
+        var timeDiff = currTime - prevTime;
+        var tempDiff = currTemp - prevTemp;
+
+        if (timeDiff > 0) {
+            if (tempDiff !== 0) {
+                var rate = (tempDiff / timeDiff) * 3600;
+                segments.push({ rate: Math.round(rate * 10) / 10, target: currTemp, hold: 0 });
+            } else {
+                var holdMinutes = timeDiff / 60;
+                if (segments.length > 0 && segments[segments.length - 1].target === currTemp) {
+                    segments[segments.length - 1].hold += holdMinutes;
+                } else {
+                    segments.push({ rate: 0, target: currTemp, hold: holdMinutes });
+                }
+            }
+        }
+    }
+    return segments;
+}
+
+function segmentsToLegacy(startTemp, segments) {
+    var data = [[0, startTemp]];
+    var currentTime = 0;
+    var currentTemp = startTemp;
+
+    for (var i = 0; i < segments.length; i++) {
+        var seg = segments[i];
+        var rate = seg.rate;
+
+        if (typeof rate === 'string') {
+            var tempDiff = Math.abs(seg.target - currentTemp);
+            var estRate = rate === "max" ? 500 : 100;
+            var timeSeconds = (tempDiff / estRate) * 3600;
+            currentTime += timeSeconds;
+            currentTemp = seg.target;
+            data.push([Math.round(currentTime), currentTemp]);
+        } else if (rate !== 0) {
+            var tempDiff = seg.target - currentTemp;
+            var timeHours = Math.abs(tempDiff) / Math.abs(rate);
+            var timeSeconds = timeHours * 3600;
+            currentTime += timeSeconds;
+            currentTemp = seg.target;
+            data.push([Math.round(currentTime), currentTemp]);
+        }
+
+        if (seg.hold > 0) {
+            currentTime += seg.hold * 60;
+            data.push([Math.round(currentTime), currentTemp]);
+        }
+    }
+    return data;
+}
+
+function resetProfileToDefault() {
+    firing_profile_data = null;
+    graph.live.data = [];
+
+    if (profiles[selected_profile]) {
+        updateProfile(selected_profile);
+    }
+}
+
+// Process backlog data after profiles are loaded
+function processBacklog(backlogData) {
+    var x = backlogData;
+
+    $.each(profiles, function (i, v) {
+        if (v.name == x.profile.name) {
+            selected_profile = i;
+            $('#sel_prof').text(v.name);
+            renderProfileList();
+        }
+    });
+
+    // Use profile data as received from backend (already adjusted for actual start temp)
+    if (x.profile.data && x.profile.data.length > 0) {
+        firing_profile_data = x.profile.data;
+        graph.profile.data = x.profile.data;
+    }
+
+    // Clear any real-time points that arrived before backlog was processed
+    // (race condition: status updates can arrive while waiting for profiles to load)
+    graph.live.data = [];
+
+    // Process log entries
+    $.each(x.log, function (i, v) {
+        var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
+        graph.live.data.push([xTime, v.temperature]);
+    });
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+}
+
+function updateProfileTable_v2() {
+    var html = '<h3 class="text-secondary mt-md">Firing Segments</h3>';
+    html += '<div class="form-group">';
+    html += '<label class="form-label">Start Temp</label>';
+    html += '<input type="text" class="form-input form-input-sm" id="start_temp_input" value="' + profile_start_temp + '" style="width: 100px" />';
+    html += ' °' + temp_scale_display;
+    html += '</div>';
+
+    html += '<div class="table-responsive"><table class="segment-table">';
+    html += '<tr><th>#</th><th>Rate (°' + temp_scale_display + '/hr)</th>';
+    html += '<th>Target (°' + temp_scale_display + ')</th>';
+    html += '<th>Hold (min)</th><th>Est.</th><th></th></tr>';
+
+    var cumulative_time = 0;
+    var current_temp = profile_start_temp;
+
+    for (var i = 0; i < profile_segments.length; i++) {
+        var seg = profile_segments[i];
+        var seg_time = 0;
+
+        var rate = seg.rate;
+        if (typeof rate === 'number' && rate !== 0) {
+            var temp_diff = Math.abs(seg.target - current_temp);
+            seg_time = (temp_diff / Math.abs(rate)) * 60;
+        } else if (rate === 'max') {
+            var temp_diff = Math.abs(seg.target - current_temp);
+            seg_time = (temp_diff / 500) * 60;
+        } else if (rate === 'cool') {
+            var temp_diff = Math.abs(seg.target - current_temp);
+            seg_time = (temp_diff / 100) * 60;
+        }
+        seg_time += seg.hold || 0;
+        cumulative_time += seg_time;
+
+        var time_str = formatMinutesToHHMM(cumulative_time);
+
+        html += '<tr>';
+        html += '<td>' + (i + 1) + '</td>';
+        html += '<td><input type="text" class="form-input form-input-sm seg-rate" data-idx="' + i + '" value="' + seg.rate + '" /></td>';
+        html += '<td><input type="text" class="form-input form-input-sm seg-target" data-idx="' + i + '" value="' + seg.target + '" /></td>';
+        html += '<td><input type="text" class="form-input form-input-sm seg-hold" data-idx="' + i + '" value="' + (seg.hold || 0) + '" /></td>';
+        html += '<td class="text-muted">' + time_str + '</td>';
+        html += '<td><button class="btn-delete-segment del-segment" data-idx="' + i + '">×</button></td>';
+        html += '</tr>';
+
+        current_temp = seg.target;
+    }
+
+    html += '</table></div>';
+    html += '<div class="flex gap-sm mt-md">';
+    html += '<button class="btn btn-success" id="add_segment">+ Segment</button>';
+    html += '</div>';
+
+    $('#profile_table').html(html);
+    bindSegmentEvents();
+    updateGraphFromSegments();
+}
+
+function bindSegmentEvents() {
+    $('#start_temp_input').change(function () {
+        profile_start_temp = parseFloat($(this).val()) || 65;
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('.seg-rate, .seg-target, .seg-hold').change(function () {
+        var idx = $(this).data('idx');
+        var value = $(this).val();
+
+        if ($(this).hasClass('seg-rate')) {
+            if (value === 'max' || value === 'cool') {
+                profile_segments[idx].rate = value;
+            } else {
+                profile_segments[idx].rate = parseFloat(value) || 0;
+            }
+        } else if ($(this).hasClass('seg-target')) {
+            profile_segments[idx].target = parseFloat(value) || 0;
+        } else if ($(this).hasClass('seg-hold')) {
+            profile_segments[idx].hold = parseFloat(value) || 0;
+        }
+
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('.del-segment').click(function () {
+        var idx = $(this).data('idx');
+        profile_segments.splice(idx, 1);
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('#add_segment').click(function () {
+        var last_temp = profile_segments.length > 0 ?
+            profile_segments[profile_segments.length - 1].target : profile_start_temp;
+        profile_segments.push({
+            rate: 100,
+            target: last_temp + 100,
+            hold: 0
+        });
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+}
+
+function updateGraphFromSegments() {
+    graph.profile.data = segmentsToLegacy(profile_start_temp, profile_segments);
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+}
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
+
+function formatMinutesToHHMM(minutes) {
+    var hours = Math.floor(minutes / 60);
+    var mins = Math.round(minutes % 60);
+    return hours + 'h ' + mins + 'm';
+}
+
+function formatSecondsToHHMMSS(seconds) {
+    var hours = Math.floor(seconds / 3600);
+    var mins = Math.floor((seconds % 3600) / 60);
+    var secs = Math.floor(seconds % 60);
+    return String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+}
+
+function formatRateDisplay(rateValue) {
+    if (rateValue === 'max') return 'MAX';
+    if (rateValue === 'cool') return 'COOL';
+    if (rateValue === 0) return 'HOLD';
+    if (typeof rateValue === 'number') {
+        return clampRate(parseInt(rateValue));
+    }
+    return '---';
+}
+
+function clampRate(rate) {
+    if (rate > 9999) return 9999;
+    if (rate < -9999) return -9999;
+    return rate;
+}
+
 function formatDPS(val) {
     var tval = val;
-    if (time_scale_slope == "m") {
-        tval = val * 60;
-    }
-    if (time_scale_slope == "h") {
-        tval = (val * 60) * 60;
-    }
+    if (time_scale_slope == "m") { tval = val * 60; }
+    if (time_scale_slope == "h") { tval = (val * 60) * 60; }
     return Math.round(tval);
 }
 
-function hazardTemp(){
-
+function hazardTemp() {
     if (temp_scale == "f") {
-        return (1500 * 9 / 5) + 32
-    }
-    else {
-        return 1500
+        return (1500 * 9 / 5) + 32;
+    } else {
+        return 1500;
     }
 }
 
-function timeTickFormatter(val,axis)
-{
-// hours
-if(axis.max>3600) {
-  //var hours = Math.floor(val / (3600));
-  //return hours;
-  return Math.floor(val/3600);
-  }
+// =============================================================================
+// Heat Glow Effect
+// =============================================================================
 
-// minutes
-if(axis.max<=3600) {
-  return Math.floor(val/60);
-  }
+function updateHeatGlow(isHeating) {
+    var $sensorCard = $('[data-metric="sensor"]');
 
-// seconds
-if(axis.max<=60) {
-  return val;
-  }
+    // Set target intensity based on heating state
+    var newHeatState = isHeating;
+
+    if (newHeatState !== heat_on) {
+        heat_on = newHeatState;
+
+        // Instantly toggle the border/background
+        if (heat_on) {
+            $sensorCard.addClass('heat-active');
+            glow_target = 1;
+        } else {
+            $sensorCard.removeClass('heat-active');
+            glow_target = 0;
+        }
+    }
+
+    // Start glow animation if not already running
+    if (glow_animation_frame === null) {
+        animateGlow();
+    }
 }
 
-function runTask()
-{
-    var cmd =
-    {
+function animateGlow() {
+    var $sensorCard = $('[data-metric="sensor"]');
+
+    // Smoothly interpolate glow_intensity toward glow_target
+    var diff = glow_target - glow_intensity;
+
+    if (Math.abs(diff) > 0.002) {
+        // Very slow rates - heat up slowly, cool down even slower (like real kiln coils)
+        // These rates are per animation frame (~16ms), so multiply by 60 for per-second rate
+        var rate = diff > 0 ? 0.008 : 0.004;
+        glow_intensity += diff * rate;
+
+        // Clamp to valid range
+        glow_intensity = Math.max(0, Math.min(1, glow_intensity));
+
+        // Apply smooth glow via inline box-shadow
+        applyGlowSmooth($sensorCard, glow_intensity);
+
+        // Continue animation
+        glow_animation_frame = requestAnimationFrame(animateGlow);
+    } else {
+        // Snap to target and stop animating
+        glow_intensity = glow_target;
+        applyGlowSmooth($sensorCard, glow_intensity);
+        glow_animation_frame = null;
+    }
+}
+
+function applyGlowSmooth($card, intensity) {
+    // Calculate box-shadow values based on intensity (0-1)
+    // At max intensity: moderate glow that's visible but not overwhelming
+    if (intensity < 0.01) {
+        $card.css('box-shadow', 'none');
+        return;
+    }
+
+    // Outer glow parameters (scaled by intensity)
+    var outerBlur = Math.round(intensity * 25);      // 0-25px blur
+    var outerSpread = Math.round(intensity * 8);     // 0-8px spread
+    var outerOpacity = (intensity * 0.6).toFixed(2); // 0-0.6 opacity
+
+    // Secondary outer glow (orange, larger)
+    var outer2Blur = Math.round(intensity * 40);     // 0-40px
+    var outer2Spread = Math.round(intensity * 12);   // 0-12px
+    var outer2Opacity = (intensity * 0.35).toFixed(2);
+
+    // Inner glow
+    var innerBlur = Math.round(intensity * 20);      // 0-20px
+    var innerOpacity = (intensity * 0.25).toFixed(2);
+
+    var boxShadow =
+        '0 0 ' + outerBlur + 'px ' + outerSpread + 'px rgba(231, 76, 60, ' + outerOpacity + '), ' +
+        '0 0 ' + outer2Blur + 'px ' + outer2Spread + 'px rgba(230, 126, 34, ' + outer2Opacity + '), ' +
+        'inset 0 0 ' + innerBlur + 'px rgba(231, 76, 60, ' + innerOpacity + ')';
+
+    $card.css('box-shadow', boxShadow);
+}
+
+// Test function - call from browser console: testGlow(true) or testGlow(false)
+window.testGlow = function (on) {
+    console.log('Testing glow:', on);
+    updateHeatGlow(on);
+};
+
+// Instantly set glow to a specific level for testing: testGlowLevel(0.5)
+window.testGlowLevel = function (level) {
+    var $sensorCard = $('[data-metric="sensor"]');
+    if (level > 0) {
+        $sensorCard.addClass('heat-active');
+    } else {
+        $sensorCard.removeClass('heat-active');
+    }
+    glow_intensity = level;
+    glow_target = level;
+    applyGlowSmooth($sensorCard, level);
+    console.log('Glow set to level:', level);
+};
+
+// =============================================================================
+// Alert Indicator
+// =============================================================================
+
+function updateAlertIndicator(isActive, message) {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+    var $messageText = $('#alert-message-text');
+
+    if (isActive && !alert_active) {
+        // Activate alert
+        alert_active = true;
+        $indicator.addClass('active');
+
+        if (message) {
+            alert_message = message;
+            $messageText.text(message);
+            $messageBox.show();
+        }
+    } else if (!isActive && alert_active) {
+        // Deactivate alert
+        alert_active = false;
+        $indicator.removeClass('active flashing');
+        $messageBox.hide();
+        alert_message = '';
+    } else if (isActive && message && message !== alert_message) {
+        // Update message while alert is active
+        alert_message = message;
+        $messageText.text(message);
+        $messageBox.show();
+    }
+}
+
+function showAlertMessage(message) {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+    var $messageText = $('#alert-message-text');
+
+    alert_active = true;
+    alert_message = message;
+    $indicator.addClass('active');
+    $messageText.text(message);
+    $messageBox.show();
+}
+
+function hideAlertMessage() {
+    var $indicator = $('#alert-indicator');
+    var $messageBox = $('#alert-message-box');
+
+    alert_active = false;
+    alert_message = '';
+    $indicator.removeClass('active flashing');
+    $messageBox.hide();
+}
+
+function setAlertFlashing(shouldFlash) {
+    var $indicator = $('#alert-indicator');
+    if (shouldFlash) {
+        $indicator.addClass('flashing');
+    } else {
+        $indicator.removeClass('flashing');
+    }
+}
+
+function timeTickFormatter(val, axis) {
+    if (axis.max > 3600) {
+        return Math.floor(val / 3600);
+    }
+    if (axis.max <= 3600) {
+        return Math.floor(val / 60);
+    }
+    if (axis.max <= 60) {
+        return val;
+    }
+}
+
+// =============================================================================
+// Run Control
+// =============================================================================
+
+function runTask() {
+    var cmd = {
         "cmd": "RUN",
         "profile": profiles[selected_profile]
-    }
+    };
+
+    // Track the firing profile name for highlighting
+    firing_profile_name = profiles[selected_profile].name;
+    renderProfileList();
 
     graph.live.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
-
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
     ws_control.send(JSON.stringify(cmd));
 
+    // Hide confirmation panel
+    hideConfirmation();
 }
 
-function runTaskSimulation()
-{
-    var cmd =
-    {
-        "cmd": "SIMULATE",
-        "profile": profiles[selected_profile]
-    }
-
-    graph.live.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
-
-    ws_control.send(JSON.stringify(cmd));
-
-}
-
-
-function abortTask()
-{
-    var cmd = {"cmd": "STOP"};
+function abortTask() {
+    var cmd = { "cmd": "STOP" };
     ws_control.send(JSON.stringify(cmd));
 }
 
-function enterNewMode()
-{
-    state="EDIT"
-    $('#status').slideUp();
-    $('#edit').show();
-    $('#profile_selector').hide();
-    $('#btn_controls').hide();
-    $('#form_profile_name').attr('value', '');
-    $('#form_profile_name').attr('placeholder', 'Please enter a name');
-    graph.profile.points.show = true;
-    graph.profile.draggable = true;
-    graph.profile.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-    updateProfileTable();
-}
+// =============================================================================
+// Resume Control
+// =============================================================================
 
-function enterEditMode()
-{
-    state="EDIT"
-    $('#status').slideUp();
-    $('#edit').show();
-    $('#profile_selector').hide();
-    $('#btn_controls').hide();
-    console.log(profiles);
-    $('#form_profile_name').val(profiles[selected_profile].name);
-    graph.profile.points.show = true;
-    graph.profile.draggable = true;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-    updateProfileTable();
-    toggleTable();
-}
+var resume_state = null;       // Cached resume state from server
+var resume_check_timer = null; // Timer for periodic resume state checks
 
-function leaveEditMode()
-{
-    selected_profile_name = $('#form_profile_name').val();
-    ws_storage.send('GET');
-    state="IDLE";
-    $('#edit').hide();
-    $('#profile_selector').show();
-    $('#btn_controls').show();
-    $('#status').slideDown();
-    $('#profile_table').slideUp();
-    graph.profile.points.show = false;
-    graph.profile.draggable = false;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-}
-
-function newPoint()
-{
-    if(graph.profile.data.length > 0)
-    {
-        var pointx = parseInt(graph.profile.data[graph.profile.data.length-1][0])+15;
-    }
-    else
-    {
-        var pointx = 0;
-    }
-    graph.profile.data.push([pointx, Math.floor((Math.random()*230)+25)]);
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-    updateProfileTable();
-}
-
-function delPoint()
-{
-    graph.profile.data.splice(-1,1)
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
-    updateProfileTable();
-}
-
-function toggleTable()
-{
-    if($('#profile_table').css('display') == 'none')
-    {
-        $('#profile_table').slideDown();
-    }
-    else
-    {
-        $('#profile_table').slideUp();
-    }
-}
-
-function saveProfile()
-{
-    name = $('#form_profile_name').val();
-    var rawdata = graph.plot.getData()[0].data
-    var data = [];
-    var last = -1;
-
-    for(var i=0; i<rawdata.length;i++)
-    {
-        if(rawdata[i][0] > last)
-        {
-          data.push([rawdata[i][0], rawdata[i][1]]);
-        }
-        else
-        {
-          $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> <b>ERROR 88:</b><br/>An oven is not a time-machine", {
-            ele: 'body', // which element to append to
-            type: 'alert', // (null, 'info', 'error', 'success')
-            offset: {from: 'top', amount: 250}, // 'top', or 'bottom'
-            align: 'center', // ('left', 'right', or 'center')
-            width: 385, // (integer, or 'auto')
-            delay: 5000,
-            allow_dismiss: true,
-            stackup_spacing: 10 // spacing between consecutively stacked growls.
-          });
-
-          return false;
-        }
-
-        last = rawdata[i][0];
-    }
-
-    var profile = { "type": "profile", "data": data, "name": name }
-    var put = { "cmd": "PUT", "profile": profile }
-
-    var put_cmd = JSON.stringify(put);
-
-    ws_storage.send(put_cmd);
-
-    leaveEditMode();
-}
-
-function get_tick_size() {
-//switch(time_scale_profile){
-//  case "s":
-//    return 1;
-//  case "m":
-//    return 60;
-//  case "h":
-//    return 3600;
-//  }
-return 3600;
-}
-
-function getOptions()
-{
-
-  var options =
-  {
-
-    series:
-    {
-        lines:
-        {
-            show: true
-        },
-
-        points:
-        {
-            show: true,
-            radius: 5,
-            symbol: "circle"
-        },
-
-        shadowSize: 3
-
-    },
-
-	xaxis:
-    {
-      min: 0,
-      tickColor: 'rgba(216, 211, 197, 0.2)',
-      tickFormatter: timeTickFormatter,
-      tickSize: get_tick_size(),
-      font:
-      {
-        size: 14,
-        lineHeight: 14,        weight: "normal",
-        family: "Digi",
-        variant: "small-caps",
-        color: "rgba(216, 211, 197, 0.85)"
-      }
-	},
-
-	yaxis:
-    {
-      min: 0,
-      tickDecimals: 0,
-      draggable: false,
-      tickColor: 'rgba(216, 211, 197, 0.2)',
-      font:
-      {
-        size: 14,
-        lineHeight: 14,
-        weight: "normal",
-        family: "Digi",
-        variant: "small-caps",
-        color: "rgba(216, 211, 197, 0.85)"
-      }
-	},
-
-	grid:
-    {
-	  color: 'rgba(216, 211, 197, 0.55)',
-      borderWidth: 1,
-      labelMargin: 10,
-      mouseActiveRadius: 50
-	},
-
-    legend:
-    {
-      show: false
-    }
-  }
-
-  return options;
-
-}
-
-function fetchLastFiring()
-{
+function checkResumeState() {
     $.ajax({
-        url: '/api/last_firing',
+        url: '/api/resume_state',
         type: 'GET',
         dataType: 'json',
-        success: function(data) {
-            if (data && !data.error) {
-                last_firing_data = data;
-                displayLastFiring(data);
+        success: function (data) {
+            if (data.available && data.resume) {
+                resume_state = data.resume;
+                updateResumeButtonVisibility();
+                // Start/restart timer only when resume state exists
+                // This allows us to detect when it expires
+                if (!resume_check_timer) {
+                    startResumeCheckTimer();
+                }
             } else {
-                $('#last_firing_panel').hide();
+                resume_state = null;
+                $('#btn_resume').hide();
+                hideResumeConfirmation();
+                // Stop timer when no resume state available
+                stopResumeCheckTimer();
             }
         },
-        error: function() {
-            $('#last_firing_panel').hide();
+        error: function () {
+            resume_state = null;
+            $('#btn_resume').hide();
+            // Stop timer on error
+            stopResumeCheckTimer();
         }
     });
 }
 
-function displayLastFiring(data)
-{
-    if (!data || data.error) {
-        $('#last_firing_panel').hide();
-        return;
-    }
-
-    // Format duration
-    var duration_str = new Date(data.duration_seconds * 1000).toISOString().substr(11, 8);
-    
-    // Format timestamp
-    var end_time = new Date(data.end_time);
-    var timestamp_str = end_time.toLocaleString();
-    
-    // Format status with appropriate styling
-    var status_str = data.status || 'completed';
-    var status_html = '<span class="label label-';
-    if (status_str === 'completed') {
-        status_html += 'success">Completed';
-    } else if (status_str === 'aborted') {
-        status_html += 'warning">Aborted';
-    } else if (status_str === 'emergency_stop') {
-        status_html += 'danger">Emergency Stop';
+function updateResumeButtonVisibility() {
+    // Resume button only shows when IDLE, resume state exists,
+    // and the currently selected profile matches the aborted profile
+    if (state === 'IDLE' && resume_state && resume_state.profile) {
+        var selectedName = profiles[selected_profile] ? profiles[selected_profile].name : '';
+        if (selectedName === resume_state.profile) {
+            $('#btn_resume').show();
+        } else {
+            $('#btn_resume').hide();
+            hideResumeConfirmation();
+        }
     } else {
-        status_html += 'default">' + status_str;
-    }
-    status_html += '</span>';
-    
-    // Update fields
-    $('#last_firing_profile').text(data.profile_name || '-');
-    $('#last_firing_status').html(status_html);
-    $('#last_firing_duration').text(duration_str);
-    $('#last_firing_cost').text((data.currency_type || '$') + ' ' + (data.final_cost || 0).toFixed(2));
-    $('#last_firing_divergence').text((data.avg_divergence || 0).toFixed(2) + '°' + (data.temp_scale === 'f' ? 'F' : 'C'));
-    $('#last_firing_timestamp').text(timestamp_str);
-    
-    // Show panel only when in IDLE state
-    if (state === 'IDLE') {
-        $('#last_firing_panel').slideDown();
+        $('#btn_resume').hide();
     }
 }
 
-function hideLastFiring()
-{
-    $('#last_firing_panel').slideUp();
+function showResumeConfirmation() {
+    if (!resume_state) return;
+
+    var details = '<strong>Resume last firing?</strong><br>';
+    details += 'Profile: <strong>' + escapeHtml(resume_state.profile || 'Unknown') + '</strong><br>';
+
+    if (typeof resume_state.current_segment !== 'undefined') {
+        details += 'Segment: ' + (resume_state.current_segment + 1) + ' of ' +
+                   (resume_state.total_segments || '?') +
+                   ' (' + (resume_state.segment_phase || 'ramp') + ')<br>';
+    }
+
+    if (resume_state.temperature) {
+        details += 'Temp at abort: ' + Math.round(resume_state.temperature) + '°' + temp_scale_display + '<br>';
+    }
+    if (resume_state.current_temperature) {
+        details += 'Current temp: ' + Math.round(resume_state.current_temperature) + '°' + temp_scale_display + '<br>';
+    }
+
+    details += 'Aborted: ' + resume_state.minutes_ago + ' min ago';
+
+    $('#resume-confirm-details').html(details);
+    $('#resume-confirm-panel').addClass('visible').show();
+}
+
+function hideResumeConfirmation() {
+    $('#resume-confirm-panel').removeClass('visible');
+    setTimeout(function () {
+        if (!$('#resume-confirm-panel').hasClass('visible')) {
+            $('#resume-confirm-panel').hide();
+        }
+    }, 300);
+}
+
+function resumeTask() {
+    var cmd = { "cmd": "RESUME" };
+
+    // Track the firing profile for highlighting
+    if (resume_state && resume_state.profile) {
+        firing_profile_name = resume_state.profile;
+
+        // Select the matching profile in the list
+        for (var i = 0; i < profiles.length; i++) {
+            if (profiles[i].name === resume_state.profile) {
+                selected_profile = i;
+                updateProfile(i);
+                break;
+            }
+        }
+        renderProfileList();
+    }
+
+    graph.live.data = [];
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+    ws_control.send(JSON.stringify(cmd));
+
+    hideResumeConfirmation();
+    resume_state = null;
+    $('#btn_resume').hide();
+}
+
+function startResumeCheckTimer() {
+    // Check resume state every 60 seconds while idle (to detect expiration)
+    // Only runs when a resume state exists
+    if (resume_check_timer) clearInterval(resume_check_timer);
+    resume_check_timer = setInterval(function () {
+        if (state === 'IDLE') {
+            checkResumeState();
+        } else {
+            // Stop timer if not idle (will restart when transitioning back to IDLE if needed)
+            stopResumeCheckTimer();
+        }
+    }, 60000);
+}
+
+function stopResumeCheckTimer() {
+    if (resume_check_timer) {
+        clearInterval(resume_check_timer);
+        resume_check_timer = null;
+    }
+}
+
+// =============================================================================
+// Confirmation Panel
+// =============================================================================
+
+function showConfirmation() {
+    $('#confirm-panel').addClass('visible').show();
+}
+
+function hideConfirmation() {
+    $('#confirm-panel').removeClass('visible');
+    setTimeout(function () {
+        if (!$('#confirm-panel').hasClass('visible')) {
+            $('#confirm-panel').hide();
+        }
+    }, 300);
+}
+
+// =============================================================================
+// Edit Mode
+// =============================================================================
+
+function enterNewMode() {
+    edit_mode = true;
+
+    $('#btn_controls').hide();
+    $('#edit-panel').slideDown();
+    $('#form_profile_name').val('').attr('placeholder', 'Enter profile name');
+
+    graph.profile.points.show = true;
+    graph.profile.draggable = true;
+    graph.profile.data = [];
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    profile_version = 2;
+    profile_segments = [];
+    profile_start_temp = 65;
+    updateProfileTable_v2();
+    $('#profile_table').slideDown();
+}
+
+function enterEditMode() {
+    edit_mode = true;
+
+    $('#btn_controls').hide();
+    $('#edit-panel').slideDown();
+    $('#form_profile_name').val(profiles[selected_profile].name);
+
+    graph.profile.points.show = true;
+    graph.profile.draggable = true;
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    var profile = profiles[selected_profile];
+    loadProfileForEditing(profile);
+
+    updateProfileTable_v2();
+    $('#profile_table').show();
+}
+
+function leaveEditMode() {
+    selected_profile_name = $('#form_profile_name').val();
+    ws_storage.send('GET');
+    edit_mode = false;
+
+    $('#edit-panel').slideUp();
+    $('#btn_controls').show();
+    $('#profile_table').slideUp();
+
+    graph.profile.points.show = false;
+    graph.profile.draggable = false;
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 }
 
 
+function deleteProfile() {
+    var profile = { "type": "profile", "data": "", "name": selected_profile_name };
+    var delete_struct = { "cmd": "DELETE", "profile": profile };
+    var delete_cmd = JSON.stringify(delete_struct);
 
-$(document).ready(function()
-{
+    console.log("Delete profile:" + selected_profile_name);
+    ws_storage.send(delete_cmd);
+    ws_storage.send('GET');
 
-    if(!("WebSocket" in window))
-    {
-        $('#chatLog, input, button, #examples').fadeOut("fast");
-        $('<p>Oh no, you need a browser that supports WebSockets. How about <a href="http://www.google.com/chrome">Google Chrome</a>?</p>').appendTo('#container');
+    selected_profile_name = profiles[0] ? profiles[0].name : '';
+    leaveEditMode();
+}
+
+function saveProfile() {
+    var name = $('#form_profile_name').val();
+
+    if (!name || name.trim() === '') {
+        showAlert('error', 'Please enter a profile name');
+        return false;
     }
-    else
-    {
 
-        // Status Socket ////////////////////////////////
+    if (profile_segments.length === 0) {
+        showAlert('error', 'Please add at least one segment to the profile');
+        return false;
+    }
 
-        ws_status.onopen = function()
-        {
-            console.log("Status Socket has been opened");
+    var valid = true;
+    var current_temp = profile_start_temp;
 
-//            $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span>Getting data from server",
-//            {
-//            ele: 'body', // which element to append to
-//            type: 'success', // (null, 'info', 'error', 'success')
-//            offset: {from: 'top', amount: 250}, // 'top', or 'bottom'
-//            align: 'center', // ('left', 'right', or 'center')
-//            width: 385, // (integer, or 'auto')
-//            delay: 2500,
-//            allow_dismiss: true,
-//            stackup_spacing: 10 // spacing between consecutively stacked growls.
-//            });
-        };
+    for (var i = 0; i < profile_segments.length; i++) {
+        var seg = profile_segments[i];
+        if (typeof seg.rate === 'number' && seg.rate !== 0) {
+            if (seg.rate > 0 && seg.target < current_temp) {
+                valid = false;
+                showAlert('error', 'Segment ' + (i + 1) + ': Positive rate with decreasing target');
+                break;
+            }
+            if (seg.rate < 0 && seg.target > current_temp) {
+                valid = false;
+                showAlert('error', 'Segment ' + (i + 1) + ': Negative rate with increasing target');
+                break;
+            }
+        }
+        current_temp = seg.target;
+    }
 
-        ws_status.onclose = function()
-        {
-            $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> <b>ERROR 1:</b><br/>Status Websocket not available", {
-            ele: 'body', // which element to append to
-            type: 'error', // (null, 'info', 'error', 'success')
-            offset: {from: 'top', amount: 250}, // 'top', or 'bottom'
-            align: 'center', // ('left', 'right', or 'center')
-            width: 385, // (integer, or 'auto')
-            delay: 5000,
-            allow_dismiss: true,
-            stackup_spacing: 10 // spacing between consecutively stacked growls.
-          });
-        };
+    if (!valid) return false;
 
-        ws_status.onmessage = function(e)
-        {
-            x = JSON.parse(e.data);
-            if (x.type == "backlog")
-            {
-                if (x.profile)
-                {
-                    selected_profile_name = x.profile.name;
-                    $.each(profiles,  function(i,v) {
-                        if(v.name == x.profile.name) {
-                            updateProfile(i);
-                            $('#e2').select2('val', i);
+    var profile = {
+        "type": "profile",
+        "version": 2,
+        "name": name,
+        "start_temp": profile_start_temp,
+        "temp_units": temp_scale,
+        "segments": profile_segments
+    };
+
+    var put = { "cmd": "PUT", "profile": profile };
+    var put_cmd = JSON.stringify(put);
+    ws_storage.send(put_cmd);
+    leaveEditMode();
+}
+
+// =============================================================================
+// Alert System
+// =============================================================================
+
+function showAlert(type, message) {
+    $.bootstrapGrowl('<b>' + (type === 'error' ? 'ERROR' : 'INFO') + ':</b> ' + message, {
+        ele: 'body',
+        type: type === 'error' ? 'danger' : type,
+        offset: { from: 'top', amount: 80 },
+        align: 'center',
+        width: 350,
+        delay: 5000,
+        allow_dismiss: true,
+        stackup_spacing: 10
+    });
+}
+
+// =============================================================================
+// Graph Options - Dark Theme
+// =============================================================================
+
+function get_tick_size() {
+    return 3600;
+}
+
+function getOptions() {
+    var options = {
+        series: {
+            lines: { show: true, lineWidth: 2 },
+            points: { show: true, radius: 4, symbol: "circle" },
+            shadowSize: 0
+        },
+        xaxis: {
+            min: 0,
+            tickColor: 'rgba(255, 255, 255, 0.1)',
+            tickFormatter: timeTickFormatter,
+            tickSize: get_tick_size(),
+            font: {
+                size: 12,
+                lineHeight: 14,
+                weight: "normal",
+                family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                color: "rgba(255, 255, 255, 0.5)"
+            }
+        },
+        yaxis: {
+            min: 0,
+            tickDecimals: 0,
+            draggable: false,
+            tickColor: 'rgba(255, 255, 255, 0.1)',
+            font: {
+                size: 12,
+                lineHeight: 14,
+                weight: "normal",
+                family: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                color: "rgba(255, 255, 255, 0.5)"
+            }
+        },
+        grid: {
+            color: 'rgba(255, 255, 255, 0.15)',
+            borderWidth: 0,
+            backgroundColor: 'transparent',
+            labelMargin: 10,
+            mouseActiveRadius: 50
+        },
+        legend: { show: false }
+    };
+    return options;
+}
+
+// =============================================================================
+// Firing Gallery
+// =============================================================================
+
+var gallery_offset = 0;
+var gallery_limit = 7;
+var gallery_has_more = false;
+var selected_historical = null;
+var pinned_logs = [];
+
+function fetchFiringGallery(loadMore) {
+    if (!loadMore) {
+        gallery_offset = 0;
+    }
+
+    // First fetch pinned logs, then fetch gallery
+    $.ajax({
+        url: '/api/pinned_logs',
+        type: 'GET',
+        dataType: 'json',
+        success: function (pinnedData) {
+            pinned_logs = pinnedData.pinned || [];
+            fetchGalleryLogs(loadMore);
+        },
+        error: function () {
+            pinned_logs = [];
+            fetchGalleryLogs(loadMore);
+        }
+    });
+}
+
+function fetchGalleryLogs(loadMore) {
+    $.ajax({
+        url: '/api/firing_logs?limit=' + gallery_limit + '&offset=' + gallery_offset,
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+            if (data.error) {
+                $('#firing_gallery').hide();
+                return;
+            }
+            gallery_has_more = data.hasMore || false;
+
+            // Sort logs: pinned first (in pinned order), then by date
+            var logs = data.logs || [];
+            var sortedLogs = sortLogsWithPinned(logs, pinned_logs);
+
+            renderGallery(sortedLogs, loadMore, gallery_has_more);
+            if ((logs.length > 0) || gallery_offset > 0) {
+                $('#firing_gallery').show();
+            } else {
+                $('#firing_gallery').hide();
+            }
+        },
+        error: function () {
+            $('#firing_gallery').hide();
+        }
+    });
+}
+
+function sortLogsWithPinned(logs, pinnedList) {
+    // Separate pinned and unpinned
+    var pinned = [];
+    var unpinned = [];
+
+    logs.forEach(function (log) {
+        if (pinnedList.indexOf(log.filename) !== -1) {
+            pinned.push(log);
+        } else {
+            unpinned.push(log);
+        }
+    });
+
+    // Sort pinned by their order in pinnedList
+    pinned.sort(function (a, b) {
+        return pinnedList.indexOf(a.filename) - pinnedList.indexOf(b.filename);
+    });
+
+    // Unpinned are already sorted by date from server
+    return pinned.concat(unpinned);
+}
+
+function renderGallery(logs, append, hasMore) {
+    var $scroll = $('#gallery-scroll');
+    if (!append) {
+        $scroll.empty();
+    } else {
+        // Remove existing load-more card before adding new items
+        $scroll.find('.gallery-card-load-more').remove();
+    }
+
+    var isRunning = (state === 'RUNNING');
+    var pinIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v8"/><path d="M16 6V2H8v4"/><path d="M12 10v12"/><circle cx="12" cy="10" r="2"/></svg>';
+
+    logs.forEach(function (log) {
+        var date = new Date(log.end_time);
+        var dateStr = date.toLocaleDateString();
+        var duration = formatSecondsToHHMMSS(log.duration_seconds || 0);
+        var isPinned = pinned_logs.indexOf(log.filename) !== -1;
+
+        var trashIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3,6 5,6 21,6"/><path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6M8,6V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+        var checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20,6 9,17 4,12"/></svg>';
+        var cardHtml = '<div class="gallery-card' + (isRunning ? ' disabled' : '') + (isPinned ? ' pinned' : '') +
+            '" data-filename="' + log.filename + '">' +
+            '<button class="gallery-card-pin' + (isPinned ? ' pinned' : '') + '">' + pinIcon + '</button>' +
+            '<div class="gallery-card-profile">' + escapeHtml(log.profile_name || '-') + '</div>' +
+            '<div class="gallery-card-date">' + dateStr + '</div>' +
+            '<div class="gallery-card-stats">' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Duration</span>' +
+            '<span class="gallery-card-stat-value">' + duration + '</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Cost</span>' +
+            '<span class="gallery-card-stat-value">' + (log.currency_type || '$') +
+            (log.final_cost || 0).toFixed(2) + '</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Divergence</span>' +
+            '<span class="gallery-card-stat-value">±' + (log.avg_divergence || 0).toFixed(1) + '°</span></div>' +
+            '<div class="gallery-card-stat"><span class="gallery-card-stat-label">Status</span>' +
+            '<span class="gallery-card-stat-value">' + formatStatus(log.status) + '</span></div>' +
+            '</div>' +
+            '<button class="gallery-card-delete" data-trash-icon="' + encodeURIComponent(trashIcon) + '" data-check-icon="' + encodeURIComponent(checkIcon) + '">' + trashIcon + '</button>' +
+            '</div>';
+        $scroll.append(cardHtml);
+    });
+
+    // Add Load More card at the end if there are more results
+    if (hasMore) {
+        var loadMoreHtml = '<div class="gallery-card gallery-card-load-more">' +
+            '<div class="gallery-card-load-more-content">' +
+            '<span class="gallery-card-load-more-icon">+</span>' +
+            '<span class="gallery-card-load-more-text">Load More</span>' +
+            '</div></div>';
+        $scroll.append(loadMoreHtml);
+    }
+}
+
+function formatStatus(status) {
+    if (!status) return 'OK';
+    switch (status) {
+        case 'completed': return '✓';
+        case 'aborted': return '⊘';
+        case 'emergency_stop': return '⚠';
+        default: return status.charAt(0).toUpperCase();
+    }
+}
+
+function showHistoricalView(filename) {
+    $.ajax({
+        url: '/api/firing_log/' + encodeURIComponent(filename),
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+            if (data.error) {
+                console.error('Failed to load firing log:', data.error);
+                return;
+            }
+            selected_historical = data;
+
+            // Update overlay title
+            $('#historical-title').text('Historical: ' + (data.profile_name || 'Unknown'));
+
+            // Plot historical data on graph
+            var tempLog = data.temperature_log || [];
+
+            // Use actual_elapsed_time (wall-clock, starts at 0) when available,
+            // falling back to runtime for older logs
+            var histData = tempLog.map(function (p) {
+                var t = (typeof p.actual_elapsed_time !== 'undefined') ? p.actual_elapsed_time : p.runtime;
+                return [t, p.temperature];
+            });
+
+            // Use the stored adjusted profile curve if available (aligned to actual start temp).
+            // Fall back to per-point target values for older logs.
+            var targetData;
+            if (data.adjusted_profile && data.adjusted_profile.length > 0) {
+                targetData = data.adjusted_profile;
+
+                // Clip profile curve to the actual firing duration so both curves
+                // share the same time scale. Without this, aborted/short firings show
+                // the actual temperature as an invisible sliver at the left edge.
+                if (histData.length > 0) {
+                    var maxActualTime = histData[histData.length - 1][0];
+                    if (maxActualTime > 0 && targetData[targetData.length - 1][0] > maxActualTime * 1.2) {
+                        var clipped = [];
+                        for (var i = 0; i < targetData.length; i++) {
+                            if (targetData[i][0] <= maxActualTime) {
+                                clipped.push(targetData[i]);
+                            } else {
+                                // Interpolate the profile value at maxActualTime
+                                if (i > 0) {
+                                    var t0 = targetData[i - 1][0], v0 = targetData[i - 1][1];
+                                    var t1 = targetData[i][0], v1 = targetData[i][1];
+                                    var frac = (maxActualTime - t0) / (t1 - t0);
+                                    clipped.push([maxActualTime, v0 + frac * (v1 - v0)]);
+                                }
+                                break;
+                            }
                         }
-                    });
+                        targetData = clipped;
+                    }
                 }
-
-                $.each(x.log, function(i,v) {
-                    graph.live.data.push([v.runtime, v.temperature]);
-                    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+            } else {
+                targetData = tempLog.map(function (p) {
+                    var t = (typeof p.actual_elapsed_time !== 'undefined') ? p.actual_elapsed_time : p.runtime;
+                    return [t, p.target];
                 });
             }
 
-            if(state!="EDIT")
-            {
-                state = x.state;
-                if (state!=state_last)
-                {
-                    if(state_last == "RUNNING" && state != "PAUSED" )
-                    {
-			console.log(state);
-                        $('#target_temp').html('---');
-                        updateProgress(0);
-                        $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> <b>Run completed</b>", {
-                        ele: 'body', // which element to append to
-                        type: 'success', // (null, 'info', 'error', 'success')
-                        offset: {from: 'top', amount: 250}, // 'top', or 'bottom'
-                        align: 'center', // ('left', 'right', or 'center')
-                        width: 385, // (integer, or 'auto')
-                        delay: 0,
-                        allow_dismiss: true,
-                        stackup_spacing: 10 // spacing between consecutively stacked growls.
-                        });
-                        // Fetch and display last firing results
-                        setTimeout(fetchLastFiring, 1000);
-                    }
-                }
+            // Create historical graph with distinct colors
+            var historicalProfile = {
+                data: targetData,
+                lines: { show: true, lineWidth: 2 },
+                dashes: { show: true, lineWidth: 2, dashLength: [6, 4] },
+                points: { show: false },
+                color: '#27ae60',
+                label: 'Target'
+            };
+            var historicalActual = {
+                data: histData,
+                lines: { show: true, lineWidth: 2, fill: true, fillColor: { colors: [{ opacity: 0.3 }, { opacity: 0.05 }] } },
+                points: { show: false },
+                color: '#3498db',
+                label: 'Actual'
+            };
 
-                if(state=="RUNNING")
-                {
-                    $("#nav_start").hide();
-                    $("#nav_stop").show();
-                    hideLastFiring();  // Hide last firing panel while running
+            graph.plot = $.plot("#graph_container", [historicalProfile, historicalActual], getOptions());
 
-                    graph.live.data.push([x.runtime, x.temperature]);
-                    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+            // Show overlay and add styling class
+            $('.graph-area').addClass('historical-mode');
+            $('#historical-overlay').show();
 
-                    left = parseInt(x.totaltime-x.runtime);
-                    eta = new Date(left * 1000).toISOString().substr(11, 8);
-
-                    updateProgress(parseFloat(x.runtime)/parseFloat(x.totaltime)*100);
-                    $('#state').html('<span class="glyphicon glyphicon-time" style="font-size: 22px; font-weight: normal"></span><span style="font-family: Digi; font-size: 40px;">' + eta + '</span>');
-                    $('#target_temp').html(parseInt(x.target));
-                    $('#cost').html(x.currency_type + parseFloat(x.cost).toFixed(2));
-                  
-
-
-                }
-                else
-                {
-                    $("#nav_start").show();
-                    $("#nav_stop").hide();
-                    
-                    // Handle cooling estimate display inline with state
-                    var stateHtml = '<p class="ds-text">'+state+'</p>';
-                    if(x.cooling_estimate) {
-                        var coolingText = '';
-                        if(x.cooling_estimate === 'Ready' || x.cooling_estimate === 'Calculating...') {
-                            coolingText = x.cooling_estimate;
-                        } else {
-                            coolingText = x.cooling_estimate + ' time to 100°F';
-                        }
-                        stateHtml = '<p class="ds-text">'+state+'<span id="cooling_estimate" style="display:inline; margin-left: 10px; font-size: 0.8em;">' + coolingText + '</span></p>';
-                    }
-                    $('#state').html(stateHtml);
-                    
-                    // Show last firing panel when idle
-                    if(state == "IDLE" && last_firing_data) {
-                        displayLastFiring(last_firing_data);
-                    }
-                }
-
-                $('#act_temp').html(parseInt(x.temperature));
-                heat_rate = parseInt(x.heat_rate)
-                if (heat_rate > 9999) { heat_rate = 9999; }
-                if (heat_rate < -9999) { heat_rate = -9999; }
-                $('#heat_rate').html(heat_rate);
-                if (typeof x.pidstats !== 'undefined') {
-                    $('#heat').html('<div class="bar" style="height:'+x.pidstats.out*70+'%;"></div>')
-                    }
-                if (x.cool > 0.5) { $('#cool').addClass("ds-led-cool-active"); } else { $('#cool').removeClass("ds-led-cool-active"); }
-                if (x.air > 0.5) { $('#air').addClass("ds-led-air-active"); } else { $('#air').removeClass("ds-led-air-active"); }
-                if (x.temperature > hazardTemp()) { $('#hazard').addClass("ds-led-hazard-active"); } else { $('#hazard').removeClass("ds-led-hazard-active"); }
-                if ((x.door == "OPEN") || (x.door == "UNKNOWN")) { $('#door').addClass("ds-led-door-open"); } else { $('#door').removeClass("ds-led-door-open"); }
-
-                state_last = state;
-
-            }
-        };
-
-        // Config Socket /////////////////////////////////
-
-        ws_config.onopen = function()
-        {
-            ws_config.send('GET');
-        };
-
-        ws_config.onmessage = function(e)
-        {
-            console.log (e.data);
-            x = JSON.parse(e.data);
-            temp_scale = x.temp_scale;
-            time_scale_slope = x.time_scale_slope;
-            time_scale_profile = x.time_scale_profile;
-            kwh_rate = x.kwh_rate;
-            kw_elements = x.kw_elements;
-            currency_type = x.currency_type;
-
-            if (temp_scale == "c") {temp_scale_display = "C";} else {temp_scale_display = "F";}
-
-
-            $('#act_temp_scale').html('º'+temp_scale_display);
-            $('#target_temp_scale').html('º'+temp_scale_display);
-            $('#heat_rate_temp_scale').html('º'+temp_scale_display+'/hr');
-
-            switch(time_scale_profile){
-                case "s":
-                    time_scale_long = "Seconds";
-                    break;
-                case "m":
-                    time_scale_long = "Minutes";
-                    break;
-                case "h":
-                    time_scale_long = "Hours";
-                    break;
-            }
-
+            // Mark selected card
+            $('.gallery-card').removeClass('selected');
+            $('.gallery-card[data-filename="' + filename + '"]').addClass('selected');
+        },
+        error: function (xhr, status, error) {
+            console.error('Error fetching firing log:', error);
         }
+    });
+}
 
-        // Control Socket ////////////////////////////////
+function closeHistoricalView() {
+    $('.graph-area').removeClass('historical-mode');
+    $('#historical-overlay').hide();
+    selected_historical = null;
+    $('.gallery-card').removeClass('selected');
 
-        ws_control.onopen = function()
-        {
-
-        };
-
-        ws_control.onmessage = function(e)
-        {
-            //Data from Simulation
-            console.log ("control socket has been opened")
-            console.log (e.data);
-            x = JSON.parse(e.data);
-            graph.live.data.push([x.runtime, x.temperature]);
-            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
-
-        }
-
-        // Storage Socket ///////////////////////////////
-
-        ws_storage.onopen = function()
-        {
-            ws_storage.send('GET');
-        };
-
-
-        ws_storage.onmessage = function(e)
-        {
-            message = JSON.parse(e.data);
-
-            if(message.resp)
-            {
-                if(message.resp == "FAIL")
-                {
-                    if (confirm('Overwrite?'))
-                    {
-                        message.force=true;
-                        console.log("Sending: " + JSON.stringify(message));
-                        ws_storage.send(JSON.stringify(message));
-                    }
-                    else
-                    {
-                        //do nothing
-                    }
-                }
-
-                return;
-            }
-
-            //the message is an array of profiles
-            //FIXME: this should be better, maybe a {"profiles": ...} container?
-            profiles = message;
-            //delete old options in select
-            $('#e2').find('option').remove().end();
-            // check if current selected value is a valid profile name
-            // if not, update with first available profile name
-            var valid_profile_names = profiles.map(function(a) {return a.name;});
-            if (
-              valid_profile_names.length > 0 &&
-              $.inArray(selected_profile_name, valid_profile_names) === -1
-            ) {
-              selected_profile = 0;
-              selected_profile_name = valid_profile_names[0];
-            }
-
-            // fill select with new options from websocket
-            for (var i=0; i<profiles.length; i++)
-            {
-                var profile = profiles[i];
-                //console.log(profile.name);
-                $('#e2').append('<option value="'+i+'">'+profile.name+'</option>');
-
-                if (profile.name == selected_profile_name)
-                {
-                    selected_profile = i;
-                    $('#e2').select2('val', i);
-                    updateProfile(i);
-                }
-            }
-        };
-
-
-        $("#e2").select2(
-        {
-            placeholder: "Select Profile",
-            allowClear: true,
-            minimumResultsForSearch: -1
-        });
-
-
-        $("#e2").on("change", function(e)
-        {
-            updateProfile(e.val);
-        });
-
-        // Fetch last firing data on page load
-        fetchLastFiring();
-
+    // Restore live graph
+    if (selected_profile >= 0 && profiles[selected_profile]) {
+        updateProfile(selected_profile);
+    } else {
+        graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
     }
+}
+
+function updateGalleryDisabledState() {
+    if (state === 'RUNNING') {
+        $('.gallery-card').addClass('disabled');
+        // Close historical view if open while firing starts
+        if (selected_historical) {
+            closeHistoricalView();
+        }
+    } else {
+        $('.gallery-card').removeClass('disabled');
+    }
+}
+
+function resetDeleteButton($btn) {
+    var trashIcon = decodeURIComponent($btn.data('trash-icon'));
+    $btn.removeClass('confirm').html(trashIcon);
+}
+
+// =============================================================================
+// Graph Crosshair Indicator
+// =============================================================================
+
+var crosshair_els = null; // { line, dot, info } — cached DOM references
+
+function initCrosshair() {
+    var $area = $('.graph-area');
+
+    // Create overlay elements once, appended to .graph-area (survives Flot re-plots)
+    var $line = $('<div class="crosshair-line"></div>');
+    var $dot  = $('<div class="crosshair-dot"></div>');
+    var $info = $('<div class="crosshair-info">' +
+        '<div class="crosshair-info-row actual"></div>' +
+        '<div class="crosshair-info-row setpoint"></div>' +
+        '<div class="crosshair-info-row time"></div>' +
+        '</div>');
+
+    $area.append($line, $dot, $info);
+    crosshair_els = { line: $line, dot: $dot, info: $info };
+
+    // Desktop events
+    $('#graph_container').on('mousemove', function (e) {
+        onCrosshairMove(e.pageX, e.pageY);
+    });
+    $('#graph_container').on('mouseleave', hideCrosshair);
+
+    // Touch events
+    $('#graph_container').on('touchstart touchmove', function (e) {
+        var touch = e.originalEvent.touches[0];
+        if (touch) {
+            e.preventDefault();
+            onCrosshairMove(touch.pageX, touch.pageY);
+        }
+    });
+    $('#graph_container').on('touchend touchcancel', hideCrosshair);
+}
+
+function onCrosshairMove(pageX, pageY) {
+    if (edit_mode) { hideCrosshair(); return; }
+    if (!graph.plot || !crosshair_els) return;
+
+    var plotOffset = graph.plot.offset();
+    var axes = graph.plot.getAxes();
+    var canvasX = pageX - plotOffset.left;
+    var canvasY = pageY - plotOffset.top;
+
+    // Bounds check
+    var pw = graph.plot.width();
+    var ph = graph.plot.height();
+    if (canvasX < 0 || canvasX > pw || canvasY < 0 || canvasY > ph) {
+        hideCrosshair();
+        return;
+    }
+
+    var timeVal = axes.xaxis.c2p(canvasX);
+
+    // Find nearest points in both series
+    var livePoint = findNearestPoint(graph.live.data, timeVal);
+    var profPoint = findNearestPoint(graph.profile.data, timeVal);
+
+    // Need at least one series with data
+    if (!livePoint && !profPoint) { hideCrosshair(); return; }
+
+    // Determine which series the dot tracks
+    var dotPoint, onProfile;
+    if (livePoint) {
+        dotPoint = livePoint;
+        onProfile = false;
+    } else {
+        dotPoint = profPoint;
+        onProfile = true;
+    }
+
+    // All positions are relative to .graph-area (position: relative parent).
+    // graph.plot.pointOffset() returns coords relative to #graph_container,
+    // and $gc.position() gives #graph_container's offset within .graph-area.
+    var $gc = $('#graph_container');
+    var gcPos = $gc.position();
+    var areaOffset = $('.graph-area').offset();
+    var lineX = pageX - areaOffset.left;
+
+    // Flot's internal plot offset (padding for axes labels inside #graph_container)
+    var flotPadding = graph.plot.getPlotOffset();
+
+    // Vertical line: spans the plot area height
+    crosshair_els.line.css({
+        display: 'block',
+        left: lineX + 'px',
+        top: (gcPos.top + flotPadding.top) + 'px',
+        height: ph + 'px'
+    });
+
+    // Dot: pointOffset returns {left, top} relative to #graph_container
+    var pOff = graph.plot.pointOffset({ x: dotPoint[0], y: dotPoint[1] });
+    crosshair_els.dot.css({
+        display: 'block',
+        left: (gcPos.left + pOff.left) + 'px',
+        top: (gcPos.top + pOff.top) + 'px'
+    });
+    crosshair_els.dot.toggleClass('on-profile', onProfile);
+
+    // Info box text
+    var actualText = livePoint ? (Math.round(livePoint[1]) + '°') : '---';
+    var setpointText = profPoint ? (Math.round(profPoint[1]) + '°') : '---';
+    var timeText = formatCrosshairTime(timeVal, axes);
+
+    crosshair_els.info.find('.actual').text('Actual: ' + actualText);
+    crosshair_els.info.find('.setpoint').text('Set: ' + setpointText);
+    crosshair_els.info.find('.time').text('Time: ' + timeText);
+    crosshair_els.info.css('display', 'block');
+}
+
+function findNearestPoint(data, timeVal) {
+    if (!data || data.length === 0) return null;
+
+    // Binary search for nearest time
+    var lo = 0, hi = data.length - 1;
+    while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (data[mid][0] < timeVal) lo = mid + 1;
+        else hi = mid;
+    }
+
+    // Check lo and lo-1 to find closest
+    var best = lo;
+    if (lo > 0 && Math.abs(data[lo - 1][0] - timeVal) < Math.abs(data[lo][0] - timeVal)) {
+        best = lo - 1;
+    }
+    return data[best];
+}
+
+function formatCrosshairTime(seconds, axes) {
+    if (axes.xaxis.max > 3600) {
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
+    }
+    var mins = Math.floor(seconds / 60);
+    var secs = Math.floor(seconds % 60);
+    return mins + 'm ' + (secs < 10 ? '0' : '') + secs + 's';
+}
+
+function hideCrosshair() {
+    if (!crosshair_els) return;
+    crosshair_els.line.css('display', 'none');
+    crosshair_els.dot.css('display', 'none');
+    crosshair_els.info.css('display', 'none');
+}
+
+// =============================================================================
+// Document Ready - Initialize
+// =============================================================================
+
+$(document).ready(function () {
+    if (!("WebSocket" in window)) {
+        $('body').html('<div class="widget" style="margin: 50px auto; max-width: 400px; padding: 40px; text-align: center;"><h2>Browser Not Supported</h2><p>Please use a browser that supports WebSockets, such as <a href="http://www.google.com/chrome">Google Chrome</a>.</p></div>');
+        return;
+    }
+
+    // WebSocket reconnection helper with exponential backoff
+    function connectWebSocket(path, setupHandlers) {
+        var ws = new WebSocket(host + path);
+        var reconnectDelay = 1000;
+        var maxDelay = 30000;
+
+        ws.onclose = function () {
+            console.log("WebSocket " + path + " closed, reconnecting in " + reconnectDelay + "ms");
+            disconnectedCount++;
+            updateConnectionStatus();
+            setTimeout(function () {
+                var newWs = connectWebSocket(path, setupHandlers);
+                if (path === "/status") ws_status = newWs;
+                else if (path === "/control") ws_control = newWs;
+                else if (path === "/config") ws_config = newWs;
+                else if (path === "/storage") ws_storage = newWs;
+            }, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+        };
+
+        ws.onerror = function (e) {
+            console.error("WebSocket " + path + " error", e);
+        };
+
+        setupHandlers(ws);
+        ws.addEventListener('open', function () {
+            reconnectDelay = 1000;
+            disconnectedCount = Math.max(0, disconnectedCount - 1);
+            updateConnectionStatus();
+        });
+        return ws;
+    }
+
+    var disconnectedCount = 0;
+    function updateConnectionStatus() {
+        if (disconnectedCount > 0) {
+            if ($('#connection-banner').length === 0) {
+                $('body').prepend('<div id="connection-banner" style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#d32f2f;color:white;text-align:center;padding:8px;font-size:14px;">Connection lost — reconnecting...</div>');
+            }
+        } else {
+            $('#connection-banner').remove();
+        }
+    }
+
+    // ===================
+    // Status Socket
+    // ===================
+
+    ws_status = connectWebSocket("/status", function(ws) {
+    ws.onopen = function () {
+        console.log("Status Socket connected");
+    };
+
+    ws.onmessage = function (e) {
+        var x = JSON.parse(e.data);
+
+        if (x.type == "backlog") {
+            if (x.profile) {
+                selected_profile_name = x.profile.name;
+                // If there's backlog with a profile, a firing is in progress
+                firing_profile_name = x.profile.name;
+
+                // Check if profiles are loaded yet
+                if (profiles.length === 0) {
+                    // Store backlog for processing after profiles load
+                    pending_backlog = x;
+                } else {
+                    // Profiles already loaded, process backlog immediately
+                    processBacklog(x);
+                }
+            } else {
+                // No profile in backlog, just process log entries if any
+                $.each(x.log, function (i, v) {
+                    var xTime = (typeof v.actual_elapsed_time !== 'undefined') ? v.actual_elapsed_time : v.runtime;
+                    graph.live.data.push([xTime, v.temperature]);
+                });
+                graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+            }
+            return;
+        }
+
+        // Backend sends adjusted profile data when a firing starts
+        if (x.type == "profile_update") {
+            firing_profile_data = x.data;
+            graph.profile.data = x.data;
+            graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+            return;
+        }
+
+        if (!edit_mode) {
+            if (!x || x.state === undefined) return;
+
+            state = x.state;
+            try {
+            if (state != state_last) {
+                if (state_last == "RUNNING" && state != "PAUSED") {
+                    $('#target_temp').html('---');
+                    $('#graph-target').html('---');
+                    $('#heat_rate_actual').html('---');
+                    $('#heat_rate_set').html('---');
+                    $('#elapsed_time').html('--:--:--');
+                    updateProgress(0);
+
+                    // Check if this was an emergency shutdown
+                    if (x.emergency) {
+                        showAlert('error', 'EMERGENCY STOP: ' + x.emergency);
+                        showAlertMessage('EMERGENCY: ' + x.emergency);
+                        setAlertFlashing(true);
+                    } else {
+                        showAlert('success', 'Run completed');
+                    }
+
+                    setTimeout(function () { fetchFiringGallery(false); }, 1000);
+                    // Keep the adjusted profile + live data on graph for review.
+                    // They get cleared when the user selects a profile.
+                    // Clear firing profile highlight
+                    firing_profile_name = null;
+                    renderProfileList();
+                }
+            }
+
+            // Persistent emergency alert - show until user starts a new run
+            if (x.emergency && state != "RUNNING") {
+                showAlertMessage('EMERGENCY: ' + x.emergency);
+                setAlertFlashing(true);
+            } else if (!x.emergency && state == "RUNNING") {
+                hideAlertMessage();
+            }
+
+            if (state == "RUNNING") {
+                $("#btn_start").hide();
+                $("#btn_resume").hide();
+                $("#btn_stop").show();
+                $('#eta-display').show();
+                hideResumeConfirmation();
+                stopResumeCheckTimer();
+                updateGalleryDisabledState();
+
+                // Ensure graph shows the adjusted firing profile from the backend
+                if (firing_profile_data) {
+                    graph.profile.data = firing_profile_data;
+                }
+
+                var xTime = (typeof x.actual_elapsed_time !== 'undefined') ? x.actual_elapsed_time : x.runtime;
+                // Only add graph points if we should continue graphing
+                if (shouldContinueGraphing(state, x.temperature)) {
+                    graph.live.data.push([xTime, x.temperature]);
+                    // Cap live data to prevent memory growth on long firings
+                    if (graph.live.data.length > 10000) {
+                        var half = Math.floor(graph.live.data.length / 2);
+                        var downsampled = [];
+                        for (var di = 0; di < half; di += 2) {
+                            downsampled.push(graph.live.data[di]);
+                        }
+                        graph.live.data = downsampled.concat(graph.live.data.slice(half));
+                    }
+                    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+                }
+
+                var actualRate = clampRate(parseInt(x.heat_rate) || 0);
+                $('#heat_rate_actual').html(actualRate);
+
+                if (typeof x.current_segment !== 'undefined' && typeof x.progress !== 'undefined') {
+                    $('#heat_rate_set').html(formatRateDisplay(x.target_heat_rate));
+                    var elapsed = x.actual_elapsed_time || 0;
+                    $('#elapsed_time').html(formatSecondsToHHMMSS(elapsed));
+                    var eta = formatSecondsToHHMMSS(x.eta_seconds || 0);
+                    $('#eta-time').text(eta);
+                    updateProgress(x.progress);
+                } else {
+                    $('#heat_rate_set').html('---');
+                    $('#elapsed_time').html(formatSecondsToHHMMSS(x.runtime || 0));
+                    var left = Math.max(0, Math.floor(x.totaltime - x.runtime));
+                    var eta = formatSecondsToHHMMSS(left);
+                    $('#eta-time').text(eta);
+                    updateProgress(parseFloat(x.runtime) / parseFloat(x.totaltime) * 100);
+                }
+
+                $('#target_temp').html(parseInt(x.target));
+                $('#graph-target').html(parseInt(x.target) + '°' + temp_scale_display);
+                $('#cost').html(parseFloat(x.cost).toFixed(2));
+            } else {
+                $("#btn_start").show();
+                $("#btn_stop").hide();
+                $('#eta-display').hide();
+
+                $('#heat_rate_actual').html('---');
+                $('#heat_rate_set').html('---');
+                $('#elapsed_time').html('--:--:--');
+
+                // Check resume state when transitioning to IDLE
+                if (state == "IDLE" && state_last == "RUNNING") {
+                    // Brief delay to let the backend save resume state
+                    // Timer will start automatically if resume state exists
+                    setTimeout(function () { checkResumeState(); }, 1500);
+                }
+            }
+
+            // Update displays
+            $('#act_temp').html(parseInt(x.temperature));
+            $('#graph-current').html(parseInt(x.temperature) + '°' + temp_scale_display);
+
+            // Handle simulation mode - show editable input
+            if (x.simulate && !is_sim_mode) {
+                is_sim_mode = true;
+                $('#act_temp').hide();
+                $('#act_temp_input').show().val(parseInt(x.temperature));
+                // Add sim mode indicator to sensor card
+                $('[data-metric="sensor"]').addClass('sim-mode');
+            } else if (!x.simulate && is_sim_mode) {
+                is_sim_mode = false;
+                $('#act_temp').show();
+                $('#act_temp_input').hide();
+                $('[data-metric="sensor"]').removeClass('sim-mode');
+            } else if (is_sim_mode && !$('#act_temp_input').is(':focus')) {
+                // Update input value only if not focused (user editing)
+                $('#act_temp_input').val(parseInt(x.temperature));
+            }
+
+            // Update graph remaining time
+            if (state === 'RUNNING') {
+                var remaining = (typeof x.eta_seconds !== 'undefined') ? x.eta_seconds : (x.totaltime - x.runtime);
+                $('#graph-remaining').html(formatSecondsToHHMMSS(remaining));
+            } else {
+                $('#graph-remaining').html('--:--:--');
+            }
+
+            // Heat glow effect on sensor card
+            var isHeating = (typeof x.pidstats !== 'undefined' && x.pidstats.out > 0);
+            updateHeatGlow(isHeating);
+
+            // Alert indicator for high temperature warning (don't override emergency alerts)
+            if (!x.emergency) {
+                var isHighTemp = x.temperature > hazardTemp();
+                var alertMessage = isHighTemp ? 'HIGH TEMPERATURE WARNING - ' + parseInt(x.temperature) + '°' + temp_scale_display : '';
+                updateAlertIndicator(isHighTemp, alertMessage);
+            }
+            } catch (err) {
+                console.error('Status handler error:', err);
+            } finally {
+                state_last = state;
+            }
+        }
+    };
+    });
+
+    // ===================
+    // Config Socket
+    // ===================
+
+    ws_config = connectWebSocket("/config", function(ws) {
+    ws.onopen = function () {
+        ws.send('GET');
+    };
+
+    ws.onmessage = function (e) {
+        var x = JSON.parse(e.data);
+        temp_scale = x.temp_scale;
+        time_scale_slope = x.time_scale_slope;
+        time_scale_profile = x.time_scale_profile;
+        kwh_rate = x.kwh_rate;
+        kw_elements = x.kw_elements;
+        currency_type = x.currency_type;
+        graph_cutoff_temp = x.graph_cutoff_temp || 100; // Default to 100 if not provided
+
+        temp_scale_display = (temp_scale == "c") ? "C" : "F";
+
+        $('#act_temp_scale').html('°' + temp_scale_display);
+        $('#target_temp_scale').html('°' + temp_scale_display);
+        $('#heat_rate_temp_scale').html('°' + temp_scale_display + '/hr');
+        $('#currency_display').html(currency_type);
+
+        switch (time_scale_profile) {
+            case "s": time_scale_long = "Seconds"; break;
+            case "m": time_scale_long = "Minutes"; break;
+            case "h": time_scale_long = "Hours"; break;
+        }
+    };
+    });
+
+    // ===================
+    // Control Socket
+    // ===================
+
+    ws_control = connectWebSocket("/control", function(ws) {
+    ws.onopen = function () { };
+
+    // ws_control only used for sending commands, not for graph data
+    // (graph data comes via ws_status to avoid duplicates)
+    ws.onmessage = function (e) { };
+    });
+
+    // ===================
+    // Storage Socket
+    // ===================
+
+    ws_storage = connectWebSocket("/storage", function(ws) {
+    ws.onopen = function () {
+        ws.send('GET');
+    };
+
+    ws.onmessage = function (e) {
+        var message = JSON.parse(e.data);
+
+        if (message.resp) {
+            if (message.resp == "FAIL") {
+                if (confirm('Profile exists. Overwrite?')) {
+                    message.force = true;
+                    ws.send(JSON.stringify(message));
+                }
+            }
+            return;
+        }
+
+        profiles = message;
+
+        var valid_profile_names = profiles.map(function (a) { return a.name; });
+        if (valid_profile_names.length > 0 && $.inArray(selected_profile_name, valid_profile_names) === -1) {
+            selected_profile = 0;
+            selected_profile_name = valid_profile_names[0];
+        }
+
+        // Find and select the current profile
+        for (var i = 0; i < profiles.length; i++) {
+            if (profiles[i].name == selected_profile_name) {
+                selected_profile = i;
+                updateProfile(i);
+                break;
+            }
+        }
+
+        renderProfileList();
+
+        // Process any pending backlog that was deferred while waiting for profiles to load
+        if (pending_backlog !== null) {
+            processBacklog(pending_backlog);
+            pending_backlog = null;
+        }
+    };
+    });
+
+    // ===================
+    // UI Event Handlers
+    // ===================
+
+    // Start button - show confirmation
+    $('#btn_start').on('click', function () {
+        showConfirmation();
+    });
+
+    // Confirmation actions
+    $('#confirm-yes').on('click', function () {
+        runTask();
+    });
+
+    $('#confirm-no').on('click', function () {
+        hideConfirmation();
+    });
+
+    // Stop button
+    $('#btn_stop').on('click', function () {
+        abortTask();
+    });
+
+    // Resume button - show confirmation with details
+    $('#btn_resume').on('click', function () {
+        // Refresh resume state before showing confirmation
+        $.ajax({
+            url: '/api/resume_state',
+            type: 'GET',
+            dataType: 'json',
+            success: function (data) {
+                if (data.available && data.resume) {
+                    resume_state = data.resume;
+                    showResumeConfirmation();
+                } else {
+                    resume_state = null;
+                    $('#btn_resume').hide();
+                    showAlert('error', 'Resume no longer available (expired)');
+                }
+            },
+            error: function () {
+                showAlert('error', 'Failed to check resume state');
+            }
+        });
+    });
+
+    // Resume confirmation actions
+    $('#resume-confirm-yes').on('click', function () {
+        resumeTask();
+    });
+
+    $('#resume-confirm-no').on('click', function () {
+        hideResumeConfirmation();
+    });
+
+    // Edit button
+    $('#btn_edit').on('click', function () {
+        enterEditMode();
+    });
+
+    // New profile button
+    $('#btn_new').on('click', function () {
+        enterNewMode();
+    });
+
+    // Edit panel buttons
+    $('#btn_save').on('click', function () {
+        saveProfile();
+    });
+
+    $('#btn_exit').on('click', function () {
+        leaveEditMode();
+    });
+
+    $('#btn_delProfile').on('click', function () {
+        if (confirm('Delete this profile? This cannot be undone.')) {
+            deleteProfile();
+        }
+    });
+
+    // Gallery card click (ignore if clicking delete or pin button)
+    $(document).on('click', '.gallery-card:not(.disabled):not(.gallery-card-load-more)', function (e) {
+        if ($(e.target).closest('.gallery-card-delete').length) return;
+        if ($(e.target).closest('.gallery-card-pin').length) return;
+        showHistoricalView($(this).data('filename'));
+    });
+
+    // Pin button click handler
+    $(document).on('click', '.gallery-card-pin', function (e) {
+        e.stopPropagation();
+        var $btn = $(this);
+        var $card = $btn.closest('.gallery-card');
+        var filename = $card.data('filename');
+        var isPinned = $btn.hasClass('pinned');
+
+        var method = isPinned ? 'DELETE' : 'POST';
+        var url = '/api/pinned_logs/' + encodeURIComponent(filename);
+
+        $.ajax({
+            url: url,
+            type: method,
+            dataType: 'json',
+            success: function (data) {
+                if (data.success) {
+                    // Update local state and UI immediately for responsiveness
+                    if (isPinned) {
+                        $btn.removeClass('pinned');
+                        $card.removeClass('pinned');
+                        // Remove from local pinned list
+                        var index = pinned_logs.indexOf(filename);
+                        if (index > -1) {
+                            pinned_logs.splice(index, 1);
+                        }
+                    } else {
+                        $btn.addClass('pinned');
+                        $card.addClass('pinned');
+                        // Add to local pinned list
+                        if (pinned_logs.indexOf(filename) === -1) {
+                            pinned_logs.unshift(filename);
+                        }
+                    }
+
+                    // Re-fetch gallery to sort correctly
+                    // We use a small timeout to let the visual toggle feedback be seen first
+                    setTimeout(function () {
+                        fetchFiringGallery(false);
+                    }, 300);
+                } else {
+                    showAlert('error', data.error || 'Failed to update pin state');
+                }
+            },
+            error: function () {
+                showAlert('error', 'Failed to update pin state');
+            }
+        });
+    });
+
+    // Delete button click handler
+    $(document).on('click', '.gallery-card-delete', function (e) {
+        e.stopPropagation();
+        var $btn = $(this);
+        var $card = $btn.closest('.gallery-card');
+        var filename = $card.data('filename');
+
+        if ($btn.hasClass('confirm')) {
+            // Second click - confirm deletion
+            $.ajax({
+                url: '/api/firing_log/' + encodeURIComponent(filename),
+                type: 'DELETE',
+                dataType: 'json',
+                success: function (data) {
+                    if (data.success) {
+                        // If this was the selected historical view, close it
+                        if ($card.hasClass('selected')) {
+                            closeHistoricalView();
+                        }
+                        // Remove the card with animation
+                        $card.fadeOut(200, function () {
+                            $(this).remove();
+                            // Refresh gallery if it becomes empty
+                            if ($('#gallery-scroll').children().length === 0) {
+                                fetchFiringGallery(false);
+                            }
+                        });
+                    } else {
+                        showAlert('error', data.error || 'Failed to delete firing log');
+                        resetDeleteButton($btn);
+                    }
+                },
+                error: function () {
+                    showAlert('error', 'Failed to delete firing log');
+                    resetDeleteButton($btn);
+                }
+            });
+        } else {
+            // First click - show confirmation
+            var checkIcon = decodeURIComponent($btn.data('check-icon'));
+            $btn.addClass('confirm').html(checkIcon);
+        }
+    });
+
+    // Reset delete button if clicking elsewhere
+    $(document).on('click', function (e) {
+        if (!$(e.target).closest('.gallery-card-delete').length) {
+            $('.gallery-card-delete.confirm').each(function () {
+                resetDeleteButton($(this));
+            });
+        }
+    });
+
+    // Historical close button
+    $('#historical-close').on('click', function () {
+        closeHistoricalView();
+    });
+
+    // Load more card click
+    $(document).on('click', '.gallery-card-load-more', function () {
+        gallery_offset += gallery_limit;
+        fetchFiringGallery(true);
+    });
+
+    // Simulated temperature input handler
+    $('#act_temp_input').on('change', function () {
+        var newTemp = parseFloat($(this).val());
+        if (isNaN(newTemp)) return;
+
+        $.ajax({
+            url: '/api',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                cmd: 'set_sim_temp',
+                temperature: newTemp
+            }),
+            success: function (response) {
+                console.log('Simulated temperature set to:', newTemp);
+            },
+            error: function (xhr, status, error) {
+                console.error('Failed to set simulated temperature:', error);
+            }
+        });
+    });
+
+    // Fetch firing gallery on load
+    fetchFiringGallery(false);
+
+    // Check resume state on load (timer will start automatically if resume state exists)
+    checkResumeState();
+
+    // Initialize graph
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    // Initialize crosshair indicator
+    initCrosshair();
+
+    // Re-check profile name truncation on window resize
+    var resizeTimer;
+    $(window).on('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+            updateProfileTruncation();
+        }, 150);
+    });
 });

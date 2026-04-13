@@ -1,0 +1,237 @@
+/*
+ * Kiln Controller Dashboard - Layout
+ * CSS Grid based layout with responsive breakpoints
+ */
+
+/* Reset & Base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body.kiln-dashboard {
+  margin: 0;
+  padding: var(--spacing-md);
+  background: var(--bg-body);
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.4;
+}
+
+/* Main Dashboard Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: 1fr auto;
+  align-items: start;
+  gap: var(--spacing-lg);
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* Profiles and graph on row 1 */
+.widget-profiles,
+.widget-graph {
+  grid-row: 1;
+}
+
+/* Data Insights spans both rows to fill the right column */
+.widget-insights {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: stretch;
+}
+
+/* Widget Base */
+.widget {
+  background: var(--bg-widget);
+  border: 1px solid var(--border-widget);
+  border-radius: var(--widget-radius);
+  box-shadow: var(--shadow-widget);
+  overflow: hidden;
+}
+
+.widget-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-label);
+  margin: 0;
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Widget: Profiles */
+.widget-profiles {
+  display: flex;
+  flex-direction: column;
+  /* Match graph widget height: graph(280px) + graph-area padding(32px) + stats(~80px) + title(~48px) */
+  max-height: 440px;
+}
+
+.widget-profiles .widget-content {
+  flex: 1;
+  padding: var(--spacing-md);
+  overflow-y: auto;
+  min-height: 0;
+  /* Allow flex child to shrink below content size */
+}
+
+/* Widget: Graph */
+.widget-graph {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-graph .widget-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-area {
+  flex: 1;
+  min-height: 300px;
+  padding: var(--spacing-md);
+  background: var(--bg-widget-inset);
+}
+
+.graph-stats {
+  display: flex;
+  justify-content: space-around;
+  padding: var(--spacing-md);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-widget-inset);
+}
+
+/* Widget: Insights */
+.widget-insights {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-insights .widget-content {
+  flex: 1;
+  padding: var(--spacing-md);
+}
+
+/* Gallery Widget - Widescreen: below profiles+graph, next to insights */
+.widget-gallery {
+  grid-column: 1 / 3;
+  grid-row: 2;
+}
+
+/* Responsive Breakpoints - Widgets reflow, don't scale */
+
+/* Large tablets / small desktops */
+@media (max-width: 1199px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr auto;
+    justify-items: stretch;
+    align-items: stretch;
+  }
+
+  /* Graph takes full width on top row */
+  .widget-graph {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  /* Profiles and Insights side by side on row 2, aligned heights */
+  .widget-profiles {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: stretch;
+    max-height: none;
+  }
+
+  .widget-insights {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: stretch;
+  }
+
+  /* Gallery spans full width below profiles/insights */
+  .widget-gallery {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}
+
+/* Tablets */
+@media (max-width: 899px) {
+  body.kiln-dashboard {
+    padding: var(--spacing-sm);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr auto;
+    gap: var(--spacing-md);
+    align-items: stretch;
+  }
+
+  /* Graph spans full width on top */
+  .widget-graph {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+  }
+
+  /* Profiles and Insights side by side, aligned heights */
+  .widget-profiles {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: stretch;
+    max-height: none;
+  }
+
+  .widget-insights {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: stretch;
+  }
+
+  .status-header {
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+  }
+
+  /* Gallery full width below profiles/insights on tablets */
+  .widget-gallery {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}
+
+/* Mobile */
+@media (max-width: 599px) {
+  body.kiln-dashboard {
+    padding: var(--spacing-xs);
+  }
+
+  .dashboard-grid {
+    gap: var(--spacing-sm);
+  }
+
+  .status-header {
+    padding: var(--spacing-sm);
+    border-radius: var(--widget-radius-sm);
+  }
+
+  .widget {
+    border-radius: var(--widget-radius-sm);
+  }
+}

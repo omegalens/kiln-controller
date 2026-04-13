@@ -1,0 +1,1 @@
+{"type": "profile", "version": 2, "name": "ramp hold slow cool", "start_temp": 65, "temp_units": "f", "segments": [{"rate": 500, "target": 2100, "hold": 0}, {"rate": 108, "target": 2200, "hold": 5}, {"rate": -9999, "target": 2100, "hold": 30}, {"rate": -150, "target": 1400, "hold": 0}]}

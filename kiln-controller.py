@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import time
 import os
@@ -39,6 +39,27 @@ else:
 ovenWatcher = OvenWatcher(oven)
 # this ovenwatcher is used in the oven class for restarts
 oven.set_ovenwatcher(ovenWatcher)
+
+# MQTT integration (optional)
+try:
+    if getattr(config, 'mqtt_enabled', False):
+        from mqtt import MQTTClient
+        mqtt_client = MQTTClient(
+            oven,
+            host=getattr(config, 'mqtt_host', 'localhost'),
+            port=getattr(config, 'mqtt_port', 1883),
+            topic_prefix=getattr(config, 'mqtt_topic_prefix', 'kiln'),
+            publish_interval=getattr(config, 'mqtt_publish_interval', 2),
+            username=getattr(config, 'mqtt_username', None),
+            password=getattr(config, 'mqtt_password', None),
+        )
+        if mqtt_client.start():
+            ovenWatcher.mqtt_client = mqtt_client
+            log.info("MQTT integration active")
+        else:
+            log.warning("MQTT client failed to start")
+except Exception as e:
+    log.error("MQTT setup failed: %s" % e)
 
 @app.route('/')
 def index():
@@ -130,6 +151,21 @@ def handle_api():
         else:
             return {"success": False, "error": "No PID stats available"}
     
+    elif cmd == 'set_sim_temp':
+        log.info("api set_sim_temp command received")
+        if not config.simulate:
+            return {"success": False, "error": "set_sim_temp only works in simulation mode"}
+        temp = bottle.request.json.get('temperature')
+        if temp is None:
+            return {"success": False, "error": "No temperature provided"}
+        try:
+            temp = float(temp)
+            oven.board.temp_sensor.simulated_temperature = temp
+            log.info("Simulated temperature set to %s" % temp)
+            return {"success": True, "temperature": temp}
+        except (ValueError, AttributeError) as e:
+            return {"success": False, "error": str(e)}
+    
     else:
         return {"success": False, "error": "Unknown command: %s" % cmd}
 
@@ -184,19 +220,17 @@ def handle_control():
                     if profile_obj:
                         profile_json = json.dumps(profile_obj)
                         profile = Profile(profile_json)
-                    oven.run_profile(profile)
-                    ovenWatcher.record(profile)
-                elif msgdict.get("cmd") == "SIMULATE":
-                    log.info("SIMULATE command received")
-                    #profile_obj = msgdict.get('profile')
-                    #if profile_obj:
-                    #    profile_json = json.dumps(profile_obj)
-                    #    profile = Profile(profile_json)
-                    #simulated_oven = Oven(simulate=True, time_step=0.05)
-                    #simulation_watcher = OvenWatcher(simulated_oven)
-                    #simulation_watcher.add_observer(wsock)
-                    #simulated_oven.run_profile(profile)
-                    #simulation_watcher.record(profile)
+                        oven.run_profile(profile)
+                        ovenWatcher.record(profile)
+                    else:
+                        log.error("RUN command missing profile data")
+                elif msgdict.get("cmd") == "RESUME":
+                    log.info("RESUME command received")
+                    result = oven.resume_last_firing()
+                    if result.get("success"):
+                        log.info("Resume successful: %s" % result)
+                    else:
+                        log.warning("Resume failed: %s" % result.get("error"))
                 elif msgdict.get("cmd") == "STOP":
                     log.info("Stop command received")
                     oven.abort_run()
@@ -258,6 +292,12 @@ def handle_storage():
 def handle_config():
     wsock = get_websocket_from_request()
     log.info("websocket (config) opened")
+    # Send config immediately on connection
+    try:
+        wsock.send(get_config())
+    except WebSocketError:
+        log.info("websocket (config) closed")
+        return
     while True:
         try:
             message = wsock.receive()
@@ -296,19 +336,38 @@ def get_profiles():
     return json.dumps(profiles)
 
 
+def sanitize_profile_name(name):
+    """Sanitize profile name to prevent path traversal attacks.
+    Strips path separators, .., and null bytes. Returns safe filename base."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Profile name must be a non-empty string")
+    # Remove null bytes, path separators, and parent directory references
+    sanitized = name.replace('\x00', '').replace('/', '').replace('\\', '')
+    # Remove any remaining ".." sequences
+    while '..' in sanitized:
+        sanitized = sanitized.replace('..', '')
+    sanitized = sanitized.strip()
+    if not sanitized:
+        raise ValueError("Profile name is empty after sanitization")
+    return sanitized
+
 def save_profile(profile, force=False):
     """Save profile to disk in Fahrenheit (standard format)"""
     # Ensure profile has temp_units
     profile = add_temp_units(profile)
-    
+
     # Convert to Fahrenheit for storage if needed (maintain F as standard)
     if profile['temp_units'] == "c":
         profile = convert_to_f(profile)
         profile['temp_units'] = "f"
-    
+
     profile_json = json.dumps(profile)
-    filename = profile['name']+".json"
+    filename = sanitize_profile_name(profile['name'])+".json"
     filepath = os.path.join(profile_path, filename)
+    # Verify the resolved path is within the profiles directory
+    if not os.path.abspath(filepath).startswith(os.path.abspath(profile_path)):
+        log.error("Path traversal attempt blocked: %s" % profile['name'])
+        return False
     if not force and os.path.exists(filepath):
         log.error("Could not write, %s already exists" % filepath)
         return False
@@ -337,11 +396,23 @@ def convert_to_c(profile):
     if profile.get("temp_units") == "c":
         return profile
     
-    newdata = []
-    for (secs, temp) in profile["data"]:
-        temp_c = (temp - 32) * 5 / 9
-        newdata.append((secs, temp_c))
-    profile["data"] = newdata
+    # Handle v2 format (segments)
+    if profile.get("version", 1) >= 2 and "segments" in profile:
+        if "start_temp" in profile:
+            profile["start_temp"] = (profile["start_temp"] - 32) * 5 / 9
+        for segment in profile.get("segments", []):
+            segment["target"] = (segment["target"] - 32) * 5 / 9
+            # Convert rate (degrees/hour)
+            if isinstance(segment["rate"], (int, float)):
+                segment["rate"] = segment["rate"] * 5 / 9
+    else:
+        # Handle v1 format (data points)
+        newdata = []
+        for (secs, temp) in profile.get("data", []):
+            temp_c = (temp - 32) * 5 / 9
+            newdata.append((secs, temp_c))
+        profile["data"] = newdata
+    
     profile["temp_units"] = "c"
     return profile
 
@@ -351,11 +422,23 @@ def convert_to_f(profile):
     if profile.get("temp_units") == "f":
         return profile
     
-    newdata = []
-    for (secs, temp) in profile["data"]:
-        temp_f = (temp * 9 / 5) + 32
-        newdata.append((secs, temp_f))
-    profile["data"] = newdata
+    # Handle v2 format (segments)
+    if profile.get("version", 1) >= 2 and "segments" in profile:
+        if "start_temp" in profile:
+            profile["start_temp"] = (profile["start_temp"] * 9 / 5) + 32
+        for segment in profile.get("segments", []):
+            segment["target"] = (segment["target"] * 9 / 5) + 32
+            # Convert rate (degrees/hour)
+            if isinstance(segment["rate"], (int, float)):
+                segment["rate"] = segment["rate"] * 9 / 5
+    else:
+        # Handle v1 format (data points)
+        newdata = []
+        for (secs, temp) in profile.get("data", []):
+            temp_f = (temp * 9 / 5) + 32
+            newdata.append((secs, temp_f))
+        profile["data"] = newdata
+    
     profile["temp_units"] = "f"
     return profile
 
@@ -385,10 +468,17 @@ def normalize_temp_units(profiles):
     return normalized
 
 def delete_profile(profile):
-    profile_json = json.dumps(profile)
-    filename = profile['name']+".json"
+    filename = sanitize_profile_name(profile['name'])+".json"
     filepath = os.path.join(profile_path, filename)
-    os.remove(filepath)
+    # Verify the resolved path is within the profiles directory
+    if not os.path.abspath(filepath).startswith(os.path.abspath(profile_path)):
+        log.error("Path traversal attempt blocked in delete: %s" % profile['name'])
+        return False
+    try:
+        os.remove(filepath)
+    except FileNotFoundError:
+        log.warning("Profile file not found for deletion: %s" % filepath)
+        return False
     log.info("Deleted %s" % filepath)
     return True
 
@@ -398,7 +488,22 @@ def get_config():
         "time_scale_profile": config.time_scale_profile,
         "kwh_rate": config.kwh_rate,
         "kw_elements": config.kw_elements,
-        "currency_type": config.currency_type})
+        "currency_type": config.currency_type,
+        "graph_cutoff_temp": config.graph_cutoff_temp})
+
+@app.get('/api/resume_state')
+def get_resume_state():
+    """Return resume state if a resumable firing exists within the time window"""
+    log.info("/api/resume_state command received")
+    try:
+        resume_data = oven.get_resume_state()
+        if resume_data:
+            return json.dumps({"available": True, "resume": resume_data})
+        else:
+            return json.dumps({"available": False})
+    except Exception as e:
+        log.error(f"Error reading resume state: {e}")
+        return json.dumps({"available": False, "error": str(e)})
 
 @app.get('/api/last_firing')
 def get_last_firing():
@@ -417,37 +522,156 @@ def get_last_firing():
 
 @app.get('/api/firing_logs')
 def get_firing_logs():
-    """Return list of all firing log files"""
+    """Return list of firing log files with pagination support"""
     log.info("/api/firing_logs command received")
     try:
         if not os.path.exists(config.firing_logs_directory):
-            return json.dumps([])
+            return json.dumps({"logs": [], "hasMore": False})
+        
+        # Get pagination params
+        limit = int(bottle.request.query.get('limit', 7))
+        offset = int(bottle.request.query.get('offset', 0))
+        
+        all_files = sorted(os.listdir(config.firing_logs_directory), reverse=True)
+        json_files = [f for f in all_files if f.endswith('.json')]
+        
+        # Slice for pagination
+        paginated_files = json_files[offset:offset + limit]
+        has_more = (offset + limit) < len(json_files)
         
         log_files = []
-        for filename in sorted(os.listdir(config.firing_logs_directory), reverse=True):
-            if filename.endswith('.json'):
-                filepath = os.path.join(config.firing_logs_directory, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        log_data = json.load(f)
-                    # Return summary info only
-                    log_files.append({
-                        'filename': filename,
-                        'profile_name': log_data.get('profile_name'),
-                        'end_time': log_data.get('end_time'),
-                        'duration_seconds': log_data.get('duration_seconds'),
-                        'final_cost': log_data.get('final_cost'),
-                        'avg_divergence': log_data.get('avg_divergence'),
-                        'status': log_data.get('status')
-                    })
-                except Exception as e:
-                    log.error(f"Error reading log file {filename}: {e}")
-                    continue
+        for filename in paginated_files:
+            filepath = os.path.join(config.firing_logs_directory, filename)
+            try:
+                with open(filepath, 'r') as f:
+                    log_data = json.load(f)
+                # Return summary info only
+                log_files.append({
+                    'filename': filename,
+                    'profile_name': log_data.get('profile_name'),
+                    'end_time': log_data.get('end_time'),
+                    'duration_seconds': log_data.get('duration_seconds'),
+                    'final_cost': log_data.get('final_cost'),
+                    'avg_divergence': log_data.get('avg_divergence'),
+                    'currency_type': log_data.get('currency_type'),
+                    'status': log_data.get('status')
+                })
+            except Exception as e:
+                log.error(f"Error reading log file {filename}: {e}")
+                continue
         
-        return json.dumps(log_files)
+        return json.dumps({"logs": log_files, "hasMore": has_more})
     except Exception as e:
         log.error(f"Error listing firing logs: {e}")
-        return json.dumps({"error": "Failed to list firing logs"})    
+        return json.dumps({"error": "Failed to list firing logs"})
+
+@app.get('/api/firing_log/<filename>')
+def get_firing_log(filename):
+    """Return a single firing log with full temperature data for historical graph"""
+    log.info(f"/api/firing_log/{filename} command received")
+    try:
+        # Security: ensure filename doesn't contain path traversal
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        filepath = os.path.join(config.firing_logs_directory, filename)
+        if os.path.exists(filepath):
+            with open(filepath, 'r') as f:
+                return json.dumps(json.load(f))
+        return json.dumps({"error": "Firing log not found"})
+    except Exception as e:
+        log.error(f"Error reading firing log {filename}: {e}")
+        return json.dumps({"error": "Failed to read firing log"})
+
+@app.delete('/api/firing_log/<filename>')
+def delete_firing_log(filename):
+    """Delete a firing log file"""
+    log.info(f"/api/firing_log/{filename} DELETE command received")
+    try:
+        # Security: ensure filename doesn't contain path traversal
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        filepath = os.path.join(config.firing_logs_directory, filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            log.info(f"Deleted firing log: {filepath}")
+            # Also remove from pinned list if present
+            remove_from_pinned(filename)
+            return json.dumps({"success": True})
+        return json.dumps({"error": "Firing log not found"})
+    except Exception as e:
+        log.error(f"Error deleting firing log {filename}: {e}")
+        return json.dumps({"error": "Failed to delete firing log"})
+
+# Pinned logs storage file
+pinned_logs_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "storage", "pinned_logs.json"))
+
+def get_pinned_logs():
+    """Read pinned logs list from file"""
+    try:
+        if os.path.exists(pinned_logs_file):
+            with open(pinned_logs_file, 'r') as f:
+                return json.load(f)
+        return []
+    except Exception as e:
+        log.error(f"Error reading pinned logs: {e}")
+        return []
+
+def save_pinned_logs(pinned):
+    """Save pinned logs list to file"""
+    try:
+        os.makedirs(os.path.dirname(pinned_logs_file), exist_ok=True)
+        with open(pinned_logs_file, 'w') as f:
+            json.dump(pinned, f)
+        return True
+    except Exception as e:
+        log.error(f"Error saving pinned logs: {e}")
+        return False
+
+def remove_from_pinned(filename):
+    """Remove a filename from pinned list"""
+    pinned = get_pinned_logs()
+    if filename in pinned:
+        pinned.remove(filename)
+        save_pinned_logs(pinned)
+
+@app.get('/api/pinned_logs')
+def api_get_pinned_logs():
+    """Get list of pinned firing log filenames"""
+    log.info("/api/pinned_logs GET command received")
+    return json.dumps({"pinned": get_pinned_logs()})
+
+@app.post('/api/pinned_logs/<filename>')
+def api_pin_log(filename):
+    """Pin a firing log"""
+    log.info(f"/api/pinned_logs/{filename} POST command received")
+    try:
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        pinned = get_pinned_logs()
+        if filename not in pinned:
+            pinned.insert(0, filename)  # Add to front for ordering
+            save_pinned_logs(pinned)
+        return json.dumps({"success": True, "pinned": pinned})
+    except Exception as e:
+        log.error(f"Error pinning log {filename}: {e}")
+        return json.dumps({"error": "Failed to pin log"})
+
+@app.delete('/api/pinned_logs/<filename>')
+def api_unpin_log(filename):
+    """Unpin a firing log"""
+    log.info(f"/api/pinned_logs/{filename} DELETE command received")
+    try:
+        if '..' in filename or '/' in filename:
+            return json.dumps({"error": "Invalid filename"})
+        
+        remove_from_pinned(filename)
+        return json.dumps({"success": True, "pinned": get_pinned_logs()})
+    except Exception as e:
+        log.error(f"Error unpinning log {filename}: {e}")
+        return json.dumps({"error": "Failed to unpin log"})    
 
 def main():
     ip = "0.0.0.0"

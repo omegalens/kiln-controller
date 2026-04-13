@@ -1,0 +1,1 @@
+{"type": "profile", "version": 2, "name": "kiln drop test", "start_temp": 65, "temp_units": "f", "segments": [{"rate": 500, "target": 2000, "hold": 0}, {"rate": -500, "target": 60, "hold": 0}]}
