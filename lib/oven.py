@@ -158,7 +158,8 @@ class Board(object):
     '''
     def __init__(self):
         log.info("board: %s" % (self.name))
-        self.temp_sensor.start()
+        for zone in self.zones:
+            zone.temp_sensor.start()
 
 class RealBoard(Board):
     '''Each board has a thermocouple board attached to it.
@@ -168,18 +169,40 @@ class RealBoard(Board):
     def __init__(self):
         self.name = None
         self.load_libs()
-        self.temp_sensor = self.choose_tempsensor()
-        Board.__init__(self) 
+        zone_configs = get_zone_configs()
+        spi = self._create_spi()
+        spi_lock = threading.Lock()
+        self.zones = []
+        for i, zc in enumerate(zone_configs):
+            sensor = self._create_sensor(spi, zc["spi_cs"], spi_lock)
+            output = Output(zc["gpio_heat"], zc.get("gpio_heat_invert", False))
+            zone = Zone(i, zc, sensor, output)
+            self.zones.append(zone)
+        # Backward compat alias — removed in Task 7
+        self.temp_sensor = self.zones[0].temp_sensor
+        Board.__init__(self)
 
     def load_libs(self):
         import board
         self.name = board.board_id
 
-    def choose_tempsensor(self):
+    def _create_spi(self):
+        if (hasattr(config, 'spi_sclk') and config.spi_sclk and
+            hasattr(config, 'spi_mosi') and
+            hasattr(config, 'spi_miso')):
+            spi = bitbangio.SPI(config.spi_sclk, config.spi_mosi, config.spi_miso)
+            log.info("Software SPI selected")
+        else:
+            import board
+            spi = board.SPI()
+            log.info("Hardware SPI selected")
+        return spi
+
+    def _create_sensor(self, spi, cs_pin, spi_lock):
         if config.max31855:
-            return Max31855()
+            return Max31855(spi, cs_pin, spi_lock)
         if config.max31856:
-            return Max31856()
+            return Max31856(spi, cs_pin, spi_lock)
 
 class SimulatedBoard(Board):
     '''Simulated board used during simulations.
@@ -187,8 +210,16 @@ class SimulatedBoard(Board):
     '''
     def __init__(self):
         self.name = "simulated"
-        self.temp_sensor = TempSensorSimulated()
-        Board.__init__(self) 
+        zone_configs = get_zone_configs()
+        self.zones = []
+        for i, zc in enumerate(zone_configs):
+            sensor = TempSensorSimulated()
+            output = SimulatedOutput()
+            zone = Zone(i, zc, sensor, output)
+            self.zones.append(zone)
+        # Backward compat alias — removed in Task 7
+        self.temp_sensor = self.zones[0].temp_sensor
+        Board.__init__(self)
 
 class TempSensor(threading.Thread):
     '''Used by the Board class. Each Board must have
@@ -213,25 +244,15 @@ class TempSensorReal(TempSensor):
     '''real temperature sensor that takes many measurements
        during the time_step
        inputs
-           config.temperature_average_samples 
+           config.temperature_average_samples
     '''
-    def __init__(self):
+    def __init__(self, spi, cs_pin, spi_lock=None):
         TempSensor.__init__(self)
         self.sleeptime = self.time_step / float(config.temperature_average_samples)
-        self.temptracker = TempTracker() 
-        self.spi_setup()
-        self.cs = digitalio.DigitalInOut(config.spi_cs)
-
-    def spi_setup(self):
-        if(hasattr(config,'spi_sclk') and
-           hasattr(config,'spi_mosi') and
-           hasattr(config,'spi_miso')):
-            self.spi = bitbangio.SPI(config.spi_sclk, config.spi_mosi, config.spi_miso)
-            log.info("Software SPI selected for reading thermocouple")
-        else:
-            import board
-            self.spi = board.SPI();
-            log.info("Hardware SPI selected for reading thermocouple")
+        self.temptracker = TempTracker()
+        self.spi = spi
+        self.cs = digitalio.DigitalInOut(cs_pin)
+        self.spi_lock = spi_lock
 
     def get_temperature(self):
         '''read temp from tc and convert if needed'''
@@ -311,15 +332,19 @@ class ThermocoupleTracker(object):
 
 class Max31855(TempSensorReal):
     '''each subclass expected to handle errors and get temperature'''
-    def __init__(self):
-        TempSensorReal.__init__(self)
+    def __init__(self, spi, cs_pin, spi_lock=None):
+        TempSensorReal.__init__(self, spi, cs_pin, spi_lock)
         log.info("thermocouple MAX31855")
         import adafruit_max31855
         self.thermocouple = adafruit_max31855.MAX31855(self.spi, self.cs)
 
     def raw_temp(self):
         try:
-            return self.thermocouple.temperature_NIST
+            if self.spi_lock:
+                with self.spi_lock:
+                    return self.thermocouple.temperature_NIST
+            else:
+                return self.thermocouple.temperature_NIST
         except RuntimeError as rte:
             if rte.args and rte.args[0]:
                 raise Max31855_Error(rte.args[0])
@@ -398,11 +423,11 @@ class Max31856_Error(ThermocoupleError):
 
 class Max31856(TempSensorReal):
     '''each subclass expected to handle errors and get temperature'''
-    def __init__(self):
-        TempSensorReal.__init__(self)
+    def __init__(self, spi, cs_pin, spi_lock=None):
+        TempSensorReal.__init__(self, spi, cs_pin, spi_lock)
         log.info("thermocouple MAX31856")
         import adafruit_max31856
-        self.thermocouple = adafruit_max31856.MAX31856(self.spi,self.cs,
+        self.thermocouple = adafruit_max31856.MAX31856(self.spi, self.cs,
                                         thermocouple_type=config.thermocouple_type)
         if (config.ac_freq_50hz == True):
             self.thermocouple.noise_rejection = 50
@@ -411,15 +436,26 @@ class Max31856(TempSensorReal):
 
     def raw_temp(self):
         # The underlying adafruit library does not throw exceptions
-        # for thermocouple errors. Instead, they are stored in 
+        # for thermocouple errors. Instead, they are stored in
         # dict named self.thermocouple.fault. Here we check that
         # dict for errors and raise an exception.
         # and raise Max31856_Error(message)
-        temp = self.thermocouple.temperature
-        for k,v in self.thermocouple.fault.items():
-            if v:
-                raise Max31856_Error(k)
-        return temp
+        try:
+            if self.spi_lock:
+                with self.spi_lock:
+                    temp = self.thermocouple.temperature
+                    for k, v in self.thermocouple.fault.items():
+                        if v:
+                            raise Max31856_Error(k)
+                    return temp
+            else:
+                temp = self.thermocouple.temperature
+                for k, v in self.thermocouple.fault.items():
+                    if v:
+                        raise Max31856_Error(k)
+                return temp
+        except Max31856_Error:
+            raise
 
 class Oven(threading.Thread):
     '''parent oven class. this has all the common code
