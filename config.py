@@ -428,3 +428,19 @@ mqtt_topic_prefix = "kiln"
 mqtt_publish_interval = 2   # seconds between MQTT publishes
 mqtt_username = None
 mqtt_password = None
+
+########################################################################
+# Multi-Zone Configuration (optional)
+# Each zone has its own thermocouple (CS pin), relay (GPIO), PID tuning,
+# and metadata. If zones is empty or not defined, the system falls back
+# to single-zone behavior using the legacy scalar config values above.
+#
+# Shared SPI bus pins (spi_sclk, spi_miso, spi_mosi) remain top-level.
+# Only spi_cs moves into the per-zone config.
+########################################################################
+zones = []  # Empty = single-zone mode using legacy scalars above
+
+# Strategy for determining the "control temperature" that drives profile progression.
+# Only considers critical zones. Options: "coldest", "hottest", "average", or int (zone index).
+# Example: zone_control_strategy = 1  # always use zone index 1
+zone_control_strategy = "coldest"
