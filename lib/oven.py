@@ -465,6 +465,7 @@ class Oven(threading.Thread):
         self.daemon = True
         self.temperature = 0
         self.time_step = config.sensor_time_wait
+        self.zones = []  # populated by subclass after board init
         self.reset()
 
     def reset(self):
@@ -480,6 +481,18 @@ class Oven(threading.Thread):
         self.heat_rate = 0
         self.heat_rate_temps = []
         self.pid = PID(ki=config.pid_ki, kd=config.pid_kd, kp=config.pid_kp)
+        # Reset per-zone PID controllers
+        for zone in self.zones:
+            zone.pid = PID(
+                ki=zone.pid.ki, kd=zone.pid.kd, kp=zone.pid.kp
+            )
+            zone.heat = 0
+            zone.heat_rate = 0
+            zone.heat_rate_temps = []
+            zone.stall_start_time = None
+            zone.stall_start_temp = None
+            zone.runaway_start_time = None
+            zone.runaway_start_temp = None
         self.catching_up = False
         self.divergence_samples = []  # Track temp divergence for firing log
         # Cooling estimation variables
@@ -1329,17 +1342,26 @@ class Oven(threading.Thread):
             self.cooling_estimate = None
 
     def get_state(self):
-        temp = 0
-        try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-        except AttributeError as error:
-            # this happens at start-up with a simulated oven
+        # Read all zone temperatures
+        for zone in self.zones:
+            try:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            except (AttributeError, TypeError):
+                pass  # startup race
+
+        # Control temperature drives the schedule
+        if self.zones:
+            temp = self.get_control_temperature()
+        else:
             temp = 0
-            pass
 
         # Use wall clock time for heat rate calculation when using rate-based control
         time_for_heat_rate = self.actual_elapsed_time if getattr(config, 'use_rate_based_control', False) else self.runtime
         self.set_heat_rate(time_for_heat_rate, temp)
+
+        # Per-zone heat rates
+        for zone in self.zones:
+            zone.set_heat_rate(time_for_heat_rate)
 
         state = {
             'cost': self.cost,
@@ -1348,20 +1370,47 @@ class Oven(threading.Thread):
             'temperature': temp,
             'target': self.target,
             'state': self.state,
-            'heat': self.heat,
+            'heat': sum(z.heat for z in self.zones) / len(self.zones) if self.zones else self.heat,
             'heat_rate': self.heat_rate,
             'totaltime': self.totaltime,
             'kwh_rate': config.kwh_rate,
             'currency_type': config.currency_type,
             'profile': self.profile.name if self.profile else None,
-            'pidstats': self.pid.pidstats,
+            'pidstats': self.zones[0].pid.pidstats if self.zones else self.pid.pidstats,
             'catching_up': self.catching_up,
             'door': 'CLOSED',
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
             'simulate': config.simulate,
             'emergency': self.emergency_reason,
         }
-        
+
+        # Add zone data when multi-zone
+        if len(self.zones) > 1:
+            zone_temps = [z.temperature for z in self.zones]
+            state['zones'] = [{
+                'index': z.index,
+                'name': z.name,
+                'temperature': z.temperature,
+                'target': z.target,
+                'heat': z.heat,
+                'heat_rate': z.heat_rate,
+                'deviation': z.temperature - z.target if z.target else 0,
+                'critical': z.critical,
+                'pidstats': z.pid.pidstats,
+            } for z in self.zones]
+            state['zone_spread'] = max(zone_temps) - min(zone_temps)
+            state['zone_max_deviation'] = max(
+                abs(z.temperature - z.target) for z in self.zones
+            ) if any(z.target for z in self.zones) else 0
+            state['zone_control_strategy'] = getattr(config, 'zone_control_strategy', 'coldest')
+            # Identify which zone is driving the schedule and use its pidstats
+            control_temp = temp
+            for z in self.zones:
+                if z.temperature == control_temp:
+                    state['control_zone_index'] = z.index
+                    state['pidstats'] = z.pid.pidstats
+                    break
+
         # Add segment-based fields when using v2 control
         if getattr(config, 'use_rate_based_control', False) and hasattr(self, 'profile') and self.profile and hasattr(self.profile, 'segments'):
             state['target_heat_rate'] = self.target_heat_rate
@@ -2049,6 +2098,7 @@ class SimulatedOven(Oven):
 
     def __init__(self):
         self.board = SimulatedBoard()
+        self.zones = self.board.zones
         self.t_env = config.sim_t_env
         self.c_heat = config.sim_c_heat
         self.c_oven = config.sim_c_oven
@@ -2302,7 +2352,8 @@ class RealOven(Oven):
 
     def __init__(self):
         self.board = RealBoard()
-        self.output = Output(config.gpio_heat, config.gpio_heat_invert)
+        self.zones = self.board.zones
+        self.output = self.zones[0].output  # backward-compat alias; Task 10 removes
         self.reset()
 
         # call parent init
