@@ -2963,14 +2963,19 @@ class PID():
         if error < (-1 * config.pid_control_window):
             log.info("kiln outside pid control window, max cooling")
             output = 0
-            # Reset integral term when significantly above target (cooling mode)
-            # This prevents the accumulated heating integral from causing unwanted heat output
-            if self.iterm > 0:
-                log.info("Resetting positive integral term during cooling: %.2f -> 0" % self.iterm)
+            # Reset integral term when outside PID control window (cooling mode)
+            # Both positive and negative integral must be cleared to prevent
+            # the integral from holding the heater off after the kiln cools back down
+            if self.iterm != 0:
+                log.info("Resetting integral term during cooling: %.2f -> 0" % self.iterm)
                 self.iterm = 0
         elif error > (1 * config.pid_control_window):
             log.info("kiln outside pid control window, max heating")
             output = 1
+            # Reset integral when outside PID control window to prevent windup
+            if self.iterm != 0:
+                log.info("Resetting integral term during max heating: %.2f -> 0" % self.iterm)
+                self.iterm = 0
             if config.throttle_below_temp and config.throttle_percent:
                 if setpoint <= config.throttle_below_temp:
                     output = config.throttle_percent/100
