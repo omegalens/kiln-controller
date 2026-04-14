@@ -155,3 +155,123 @@ class TestSimulatedOutput:
         elapsed = time.monotonic() - start
         assert elapsed < 0.1
         assert out.active is False
+
+
+# =============================================================================
+# Test get_control_temperature()
+# =============================================================================
+
+class TestGetControlTemperature:
+    """Test the control temperature strategy logic."""
+
+    def _make_zone(self, temp, critical=True, error_limit=False):
+        from lib.oven import Zone
+        zone_config = {"name": "Z", "critical": critical}
+        zone = Zone(index=0, zone_config=zone_config, temp_sensor=None, output=None)
+        zone.temperature = temp
+        class MockStatus:
+            def over_error_limit(self):
+                return error_limit
+        class MockSensor:
+            def __init__(self):
+                self.status = MockStatus()
+        zone.temp_sensor = MockSensor()
+        return zone
+
+    def _make_oven_with_zones(self, zones):
+        class OvenLike:
+            def __init__(self, zones):
+                self.zones = zones
+                self.emergency_reason = None
+                self.state = "RUNNING"
+            def _emergency_shutdown(self, reason):
+                self.emergency_reason = reason
+                self.state = "IDLE"
+        oven = OvenLike(zones)
+        from lib.oven import Oven
+        oven.get_control_temperature = Oven.get_control_temperature.__get__(oven, OvenLike)
+        return oven
+
+    def test_coldest_strategy(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 'coldest'
+            zones = [self._make_zone(2100), self._make_zone(2050), self._make_zone(2080)]
+            oven = self._make_oven_with_zones(zones)
+            assert oven.get_control_temperature() == 2050
+        finally:
+            config.zone_control_strategy = original
+
+    def test_hottest_strategy(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 'hottest'
+            zones = [self._make_zone(2100), self._make_zone(2050)]
+            oven = self._make_oven_with_zones(zones)
+            assert oven.get_control_temperature() == 2100
+        finally:
+            config.zone_control_strategy = original
+
+    def test_average_strategy(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 'average'
+            zones = [self._make_zone(2100), self._make_zone(2000)]
+            oven = self._make_oven_with_zones(zones)
+            assert oven.get_control_temperature() == 2050
+        finally:
+            config.zone_control_strategy = original
+
+    def test_index_strategy(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 1
+            zones = [self._make_zone(2100), self._make_zone(2050)]
+            oven = self._make_oven_with_zones(zones)
+            assert oven.get_control_temperature() == 2050
+        finally:
+            config.zone_control_strategy = original
+
+    def test_index_out_of_range_falls_back(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 5
+            zones = [self._make_zone(2100)]
+            oven = self._make_oven_with_zones(zones)
+            assert oven.get_control_temperature() == 2100
+        finally:
+            config.zone_control_strategy = original
+
+    def test_index_with_tc_error_falls_back(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 0
+            zones = [self._make_zone(2100, critical=True, error_limit=True), self._make_zone(2050)]
+            oven = self._make_oven_with_zones(zones)
+            # Zone 0 has TC errors, so falls back to coldest of valid_temps (2050)
+            assert oven.get_control_temperature() == 2050
+        finally:
+            config.zone_control_strategy = original
+
+    def test_advisory_zones_excluded(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 'coldest'
+            zones = [self._make_zone(2100, critical=True), self._make_zone(1900, critical=False)]
+            oven = self._make_oven_with_zones(zones)
+            # Advisory zone (critical=False) is excluded; only critical zone at 2100 counts
+            assert oven.get_control_temperature() == 2100
+        finally:
+            config.zone_control_strategy = original
+
+    def test_all_critical_zones_failed_triggers_emergency(self):
+        original = getattr(config, 'zone_control_strategy', 'coldest')
+        try:
+            config.zone_control_strategy = 'coldest'
+            zones = [self._make_zone(None), self._make_zone(None)]
+            oven = self._make_oven_with_zones(zones)
+            result = oven.get_control_temperature()
+            assert result == 0
+            assert oven.emergency_reason is not None
+        finally:
+            config.zone_control_strategy = original

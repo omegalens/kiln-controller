@@ -522,6 +522,36 @@ class Oven(threading.Thread):
             if time2 > time1:
                 self.heat_rate = ((temp2 - temp1) / (time2 - time1))*3600
 
+    def get_control_temperature(self):
+        """Return the temperature that drives profile progression, per strategy."""
+        valid_temps = [z.temperature for z in self.zones
+                       if z.critical and z.temperature is not None]
+
+        if not valid_temps:
+            self._emergency_shutdown("All critical zone sensors failed")
+            return 0
+
+        strategy = getattr(config, 'zone_control_strategy', 'coldest')
+
+        if isinstance(strategy, int):
+            if 0 <= strategy < len(self.zones):
+                zone = self.zones[strategy]
+                if zone.temp_sensor.status.over_error_limit():
+                    log.error("zone_control_strategy zone %d ('%s') has TC errors, falling back to coldest" %
+                              (strategy, zone.name))
+                    return min(valid_temps)
+                return zone.temperature
+            log.error("zone_control_strategy index %d out of range, falling back to coldest" % strategy)
+            return min(valid_temps)
+        elif strategy == "coldest":
+            return min(valid_temps)
+        elif strategy == "hottest":
+            return max(valid_temps)
+        elif strategy == "average":
+            return sum(valid_temps) / len(valid_temps)
+        else:
+            return min(valid_temps)
+
     def run_profile(self, profile, startat=0, allow_seek=True):
         log.debug('run_profile run on thread' + threading.current_thread().name)
         runtime = startat * 60
