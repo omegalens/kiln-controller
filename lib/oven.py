@@ -816,9 +816,9 @@ class Oven(threading.Thread):
             # Pure hold segment
             return segment.target
         
-        # Get current actual temperature
+        # Get current actual temperature (direct sensor read for PID accuracy)
         try:
-            actual_temp = self.get_control_temperature()
+            actual_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
 
@@ -2199,9 +2199,9 @@ class SimulatedOven(Oven):
         if segment.rate == 0:
             return segment.target
         
-        # Get current actual temperature
+        # Get current actual temperature (direct sensor read for PID accuracy)
         try:
-            actual_temp = self.get_control_temperature()
+            actual_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
 
@@ -2307,7 +2307,7 @@ class SimulatedOven(Oven):
 
     def heat_then_cool(self):
         now_simulator = self.start_time + datetime.timedelta(milliseconds = self.runtime * 1000)
-        current_temp = self.get_control_temperature()
+        current_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         pid = self.pid.compute(self.target, current_temp, now_simulator)
 
         # During cooling segments: only heat if kiln is cooling too fast (temp below target)
@@ -2387,7 +2387,7 @@ class RealOven(Oven):
         self.output.cool(0)
 
     def heat_then_cool(self):
-        current_temp = self.get_control_temperature()
+        current_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         pid = self.pid.compute(self.target, current_temp, datetime.datetime.now())
 
         # During cooling segments: only heat if kiln is cooling too fast (temp below target)
