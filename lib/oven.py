@@ -2126,6 +2126,9 @@ class Oven(threading.Thread):
                     self.update_target_temp()
                     self.reset_if_schedule_ended()
                 
+                # Propagate oven-level target to each zone (with per-zone offset)
+                for zone in self.zones:
+                    zone.target = self.target + zone.temp_offset
                 self.heat_then_cool()
                 self.reset_if_emergency()
                 time.sleep(self.get_loop_sleep_time())
@@ -2348,7 +2351,7 @@ class SimulatedOven(Oven):
         is_natural_cool = (target_rate == "cool")
 
         for zone in self.zones:
-            zone.target = self.target
+            # zone.target already set by run() loop (self.target + zone.temp_offset)
             current_temp = zone.temp_sensor.temperature() + zone.thermocouple_offset
             zone_pid = zone.pid.compute(zone.target, current_temp, now_simulator)
 
@@ -2412,7 +2415,6 @@ class RealOven(Oven):
     def __init__(self):
         self.board = RealBoard()
         self.zones = self.board.zones
-        self.output = self.zones[0].output  # backward-compat alias; Task 10 removes
         self.reset()
 
         # call parent init
@@ -2423,55 +2425,59 @@ class RealOven(Oven):
 
     def reset(self):
         super().reset()
-        self.output.cool(0)
+        for zone in self.zones:
+            zone.output.cool(0)
 
     def heat_then_cool(self):
-        current_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
-        pid = self.pid.compute(self.target, current_temp, datetime.datetime.now())
+        now = datetime.datetime.now()
+        n = len(self.zones)
+        zone_time_step = self.time_step / n
 
-        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
-        # If kiln is at or above target, don't heat - let it cool naturally
-        cooling_override = False
         target_rate = getattr(self, 'target_heat_rate', 0)
-        is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
-        if is_natural_cool:
-            # Natural cooling: never heat, regardless of temp vs target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
-        elif is_cooling_segment and current_temp >= self.target:
-            # Controlled cooling: no heat needed while above target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
+        is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
 
-        heat_on = float(self.time_step * pid)
-        heat_off = float(self.time_step * (1 - pid))
+        for zone in self.zones:
+            current_temp = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            zone_pid = zone.pid.compute(zone.target, current_temp, now)
 
-        # self.heat is for the front end to display if the heat is on
-        self.heat = 0.0
-        if heat_on > 0:
-            self.heat = 1.0
+            # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+            # If kiln is at or above target, don't heat - let it cool naturally
+            if is_natural_cool:
+                # Natural cooling: never heat, regardless of temp vs target
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
+            elif is_cooling_segment and current_temp >= zone.target:
+                # Controlled cooling: no heat needed while above target
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
 
-        if heat_on:
-            self.output.heat(heat_on)
-        if heat_off:
-            self.output.cool(heat_off)
+            zone.heat = max(zone_pid, 0)
+            heat_on = zone.heat * zone_time_step
+            heat_off = zone_time_step - heat_on
+
+            if heat_on > 0:
+                zone.output.heat(heat_on)
+            # Always call cool() to ensure relay state is explicit
+            zone.output.cool(heat_off)
+
+        # Update oven-level heat as average for backward compat
+        self.heat = sum(z.heat for z in self.zones) / n
+
         time_left = self.totaltime - self.runtime
         try:
-            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d" %
-                (self.pid.pidstats['ispoint'],
-                self.pid.pidstats['setpoint'],
-                self.pid.pidstats['err'],
-                self.pid.pidstats['pid'],
-                self.pid.pidstats['p'],
-                self.pid.pidstats['i'],
-                self.pid.pidstats['d'],
-                heat_on,
-                heat_off,
+            zone0 = self.zones[0]
+            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat=%.2f, run_time=%d, total_time=%d, time_left=%d" %
+                (zone0.pid.pidstats['ispoint'],
+                zone0.pid.pidstats['setpoint'],
+                zone0.pid.pidstats['err'],
+                zone0.pid.pidstats['pid'],
+                zone0.pid.pidstats['p'],
+                zone0.pid.pidstats['i'],
+                zone0.pid.pidstats['d'],
+                self.heat,
                 self.runtime,
                 self.totaltime,
                 time_left))
