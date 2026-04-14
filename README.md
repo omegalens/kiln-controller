@@ -27,6 +27,8 @@ See [Rate-Based Profiles Documentation](docs/profiles-v2.md) for format details,
 
 Independent PID control for kilns with multiple heating zones. Each zone gets its own thermocouple, SSR output, and individually tuned PID parameters. A configurable control strategy (`coldest`, `hottest`, `average`, or a specific zone index) determines which zone drives schedule progression. Per-zone safety monitoring detects stalled elements and stuck relays independently.
 
+![Multi-Zone](public/assets/images/kiln-multizone.png)
+
 See [Multi-Zone Documentation](docs/multi-zone.md) for configuration, hardware setup, and control strategies.
 
 ### MQTT Integration
