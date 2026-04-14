@@ -3,6 +3,7 @@ import time
 import datetime
 import logging
 import json
+import random
 import config
 import os
 import statistics
@@ -1145,25 +1146,31 @@ class Oven(threading.Thread):
                 log.error("Failed to save firing log: %s" % e)
 
     def update_cost(self):
-        # Calculate cost based on actual energy delivered (PID output), not just on/off state
-        if hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
-            duty_cycle = self.pid.pidstats['out'] # 0.0 to 1.0
+        # Calculate cost based on average zone heat output (PID duty cycle)
+        if self.zones:
+            avg_heat = sum(z.heat for z in self.zones) / len(self.zones)
+        elif hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
+            avg_heat = self.pid.pidstats['out']  # 0.0 to 1.0
         else:
-            # Fallback for when PID stats aren't available yet or simulation quirks
-            duty_cycle = 1.0 if self.heat else 0.0
+            avg_heat = 1.0 if self.heat else 0.0
 
-        if duty_cycle > 0:
-            cost = (config.kwh_rate * config.kw_elements * duty_cycle) * (self.time_step/3600)
+        if avg_heat > 0:
+            cost = (config.kwh_rate * config.kw_elements * avg_heat) * (self.time_step / 3600)
         else:
             cost = 0
         self.cost = self.cost + cost
     
     def track_divergence(self):
-        """Track temperature divergence (actual vs target) for firing log analysis"""
+        """Track temperature divergence (actual vs target) for firing log analysis.
+        With multi-zone, tracks the max deviation across all zones."""
         try:
-            temp = self.get_control_temperature()
-            divergence = abs(self.target - temp)
-            self.divergence_samples.append(divergence)
+            if self.zones:
+                max_dev = max(abs(z.target - z.temperature) for z in self.zones)
+                self.divergence_samples.append(max_dev)
+            else:
+                temp = self.get_control_temperature()
+                divergence = abs(self.target - temp)
+                self.divergence_samples.append(divergence)
         except (AttributeError, TypeError):
             # Handle cases where temp sensor isn't ready
             pass
@@ -2147,6 +2154,19 @@ class SimulatedOven(Oven):
         self.t = getattr(config, 'sim_initial_temp', config.sim_t_env)  # deg C or F temp of oven
         self.t_h = self.t_env #deg C temp of heating element
 
+        # Per-zone thermal simulation parameters with slight random variation
+        for i, zone in enumerate(self.zones):
+            variation = 1.0 + random.uniform(-0.1, 0.1)  # +/- 10%
+            zone.sim_p_heat = config.sim_p_heat * variation
+            zone.sim_c_heat = config.sim_c_heat
+            zone.sim_c_oven = config.sim_c_oven
+            zone.sim_R_o_nocool = config.sim_R_o_nocool
+            zone.sim_R_o_cool = config.sim_R_o_cool
+            zone.sim_R_ho_noair = config.sim_R_ho_noair
+            zone.sim_R_ho_air = config.sim_R_ho_air
+            zone.sim_t_heat = zone.temp_sensor.simulated_temperature
+            zone.sim_t_oven = zone.temp_sensor.simulated_temperature
+
         super().__init__()
 
         self.start_time = self.get_start_time();
@@ -2297,86 +2317,90 @@ class SimulatedOven(Oven):
                 if hold_elapsed >= segment.hold:
                     self._advance_segment()
 
-    def heating_energy(self,pid):
-        # using pid here simulates the element being on for
-        # only part of the time_step
-        self.Q_h = self.p_heat * self.time_step * pid
+    def heating_energy(self, zone):
+        # Using zone.heat (PID output) simulates the element being on for
+        # only part of the time_step. Returns energy added to heating element.
+        return zone.heat * zone.sim_p_heat / zone.sim_c_heat * self.time_step
 
-    def temp_changes(self):
-        #temperature change of heat element by heating
-        self.t_h += self.Q_h / self.c_heat
+    def temp_changes(self, zone):
+        dt = self.time_step
+        R_o = zone.sim_R_o_nocool
+        R_ho = zone.sim_R_ho_noair
+        t_heat = zone.sim_t_heat
+        t_oven = zone.sim_t_oven
+        t_env = config.sim_t_env
 
-        #energy flux heat_el -> oven
-        self.p_ho = (self.t_h - self.t) / self.R_ho
+        # Energy flux: heating element -> oven
+        dQ_ho = (t_heat - t_oven) / R_ho * dt
+        t_heat -= dQ_ho / zone.sim_c_heat
+        t_oven += dQ_ho / zone.sim_c_oven
 
-        #temperature change of oven and heating element
-        self.t += self.p_ho * self.time_step / self.c_oven
-        self.t_h -= self.p_ho * self.time_step / self.c_heat
+        # Energy flux: oven -> environment (cooling)
+        dQ_oe = (t_oven - t_env) / R_o * dt
+        t_oven -= dQ_oe / zone.sim_c_oven
 
-        #temperature change of oven by cooling to environment
-        self.p_env = (self.t - self.t_env) / self.R_o_nocool
-        self.t -= self.p_env * self.time_step / self.c_oven
-        self.temperature = self.t
-        for zone in self.zones:
-            zone.temp_sensor.simulated_temperature = self.t
+        return t_heat, t_oven
 
     def heat_then_cool(self):
         now_simulator = self.start_time + datetime.timedelta(milliseconds = self.runtime * 1000)
-        current_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
-        pid = self.pid.compute(self.target, current_temp, now_simulator)
-
-        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
-        # If kiln is at or above target, don't heat - let it cool naturally
-        cooling_override = False
         target_rate = getattr(self, 'target_heat_rate', 0)
         is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
-        if is_natural_cool:
-            # Natural cooling: never heat, regardless of temp vs target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
-        elif is_cooling_segment and current_temp >= self.target:
-            # Controlled cooling: no heat needed while above target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
 
-        heat_on = float(self.time_step * pid)
-        heat_off = float(self.time_step * (1 - pid))
+        for zone in self.zones:
+            zone.target = self.target
+            current_temp = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            zone_pid = zone.pid.compute(zone.target, current_temp, now_simulator)
 
-        self.heating_energy(pid)
-        self.temp_changes()
+            # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+            # If kiln is at or above target, don't heat - let it cool naturally
+            if is_natural_cool:
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
+            elif is_cooling_segment and current_temp >= zone.target:
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
 
-        # self.heat is for the front end to display if the heat is on
-        self.heat = 0.0
-        if heat_on > 0:
-            self.heat = heat_on
+            zone.heat = zone_pid
 
-        log.info("simulation: -> %dW heater: %.0f -> %dW oven: %.0f -> %dW env" % (int(self.p_heat * pid),
-            self.t_h,
-            int(self.p_ho),
-            self.t,
-            int(self.p_env)))
+            # Per-zone thermal model
+            zone.sim_t_heat += self.heating_energy(zone)
+            zone.sim_t_heat, zone.sim_t_oven = self.temp_changes(zone)
+            zone.temp_sensor.simulated_temperature = zone.sim_t_oven
+
+        # Backward-compat: oven-level heat is average of zone heats
+        if self.zones:
+            self.heat = sum(z.heat for z in self.zones) / len(self.zones)
+        else:
+            self.heat = 0.0
+
+        # Update oven-level temperature from control strategy
+        self.temperature = self.get_control_temperature()
+
+        # Also update legacy oven-level sim state for any remaining references
+        if self.zones:
+            self.t = self.zones[0].sim_t_oven
+            self.t_h = self.zones[0].sim_t_heat
 
         time_left = self.totaltime - self.runtime
 
         try:
-            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d" %
-                (self.pid.pidstats['ispoint'],
-                self.pid.pidstats['setpoint'],
-                self.pid.pidstats['err'],
-                self.pid.pidstats['pid'],
-                self.pid.pidstats['p'],
-                self.pid.pidstats['i'],
-                self.pid.pidstats['d'],
-                heat_on,
-                heat_off,
-                self.runtime,
-                self.totaltime,
-                time_left))
+            zone0 = self.zones[0] if self.zones else None
+            if zone0:
+                log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat=%.2f, run_time=%d, total_time=%d, time_left=%d" %
+                    (zone0.pid.pidstats['ispoint'],
+                    zone0.pid.pidstats['setpoint'],
+                    zone0.pid.pidstats['err'],
+                    zone0.pid.pidstats['pid'],
+                    zone0.pid.pidstats['p'],
+                    zone0.pid.pidstats['i'],
+                    zone0.pid.pidstats['d'],
+                    self.heat,
+                    self.runtime,
+                    self.totaltime,
+                    time_left))
         except KeyError:
             pass
 
