@@ -3,6 +3,7 @@ import time
 import datetime
 import logging
 import json
+import random
 import config
 import os
 import statistics
@@ -46,18 +47,100 @@ class Duplogger():
 
 duplog = Duplogger().logref()
 
+
+def get_zone_configs():
+    """Return zone configs. If none defined, synthesize one from legacy scalars."""
+    if hasattr(config, 'zones') and config.zones:
+        return config.zones
+    return [{
+        "name": "Kiln",
+        "spi_cs": getattr(config, 'spi_cs', None),
+        "gpio_heat": getattr(config, 'gpio_heat', None),
+        "gpio_heat_invert": getattr(config, 'gpio_heat_invert', False),
+        "pid_kp": config.pid_kp,
+        "pid_ki": config.pid_ki,
+        "pid_kd": config.pid_kd,
+        "thermocouple_offset": config.thermocouple_offset,
+        "temp_offset": 0,
+        "critical": True,
+    }]
+
+
+class Zone:
+    """A single heating zone: thermocouple + PID + relay output."""
+    def __init__(self, index, zone_config, temp_sensor, output):
+        self.index = index
+        self.name = zone_config["name"]
+        self.temp_offset = zone_config.get("temp_offset", 0)
+        self.critical = zone_config.get("critical", True)
+        self.thermocouple_offset = zone_config.get("thermocouple_offset", 0)
+
+        self.temp_sensor = temp_sensor
+        self.output = output
+        self.pid = PID(
+            kp=zone_config.get("pid_kp", config.pid_kp),
+            ki=zone_config.get("pid_ki", config.pid_ki),
+            kd=zone_config.get("pid_kd", config.pid_kd),
+        )
+        self.temperature = 0
+        self.target = 0
+        self.heat = 0
+        self.heat_rate = 0
+        self.heat_rate_temps = []
+
+        # Per-zone safety tracking
+        self.stall_start_time = None
+        self.stall_start_temp = None
+        self.runaway_start_time = None
+        self.runaway_start_temp = None
+
+    def set_heat_rate(self, runtime):
+        """Calculate heat rate for this zone. Mirrors Oven.set_heat_rate()."""
+        min_samples = 10
+        rate_window_seconds = getattr(config, 'heat_rate_window_seconds', 300)
+        self.heat_rate_temps.append((runtime, self.temperature))
+        if len(self.heat_rate_temps) > min_samples:
+            cutoff_time = runtime - rate_window_seconds
+            filtered = [(t, tp) for t, tp in self.heat_rate_temps if t >= cutoff_time]
+            if len(filtered) >= min_samples:
+                self.heat_rate_temps = filtered
+            else:
+                self.heat_rate_temps = self.heat_rate_temps[-min_samples:]
+        if len(self.heat_rate_temps) > 1000:
+            self.heat_rate_temps = self.heat_rate_temps[-1000:]
+        if len(self.heat_rate_temps) >= 2:
+            time2 = self.heat_rate_temps[-1][0]
+            time1 = self.heat_rate_temps[0][0]
+            temp2 = self.heat_rate_temps[-1][1]
+            temp1 = self.heat_rate_temps[0][1]
+            if time2 > time1:
+                self.heat_rate = ((temp2 - temp1) / (time2 - time1)) * 3600
+
+
+class SimulatedOutput:
+    """No-op output for simulated zones. No GPIO, no sleeping."""
+    def __init__(self):
+        self.active = False
+
+    def heat(self, sleepfor):
+        self.active = True
+
+    def cool(self, sleepfor):
+        self.active = False
+
+
 class Output(object):
     '''This represents a GPIO output that controls a solid
     state relay to turn the kiln elements on and off.
-    inputs
-        config.gpio_heat
-        config.gpio_heat_invert
+    args
+        gpio_pin: the board pin to drive (e.g. config.gpio_heat)
+        invert: if True, logic is inverted (e.g. config.gpio_heat_invert)
     '''
-    def __init__(self):
+    def __init__(self, gpio_pin, invert=False):
         self.active = False
-        self.heater = digitalio.DigitalInOut(config.gpio_heat) 
-        self.heater.direction = digitalio.Direction.OUTPUT 
-        self.off = config.gpio_heat_invert
+        self.heater = digitalio.DigitalInOut(gpio_pin)
+        self.heater.direction = digitalio.Direction.OUTPUT
+        self.off = invert
         self.on = not self.off
 
     def heat(self,sleepfor):
@@ -76,7 +159,8 @@ class Board(object):
     '''
     def __init__(self):
         log.info("board: %s" % (self.name))
-        self.temp_sensor.start()
+        for zone in self.zones:
+            zone.temp_sensor.start()
 
 class RealBoard(Board):
     '''Each board has a thermocouple board attached to it.
@@ -86,18 +170,38 @@ class RealBoard(Board):
     def __init__(self):
         self.name = None
         self.load_libs()
-        self.temp_sensor = self.choose_tempsensor()
-        Board.__init__(self) 
+        zone_configs = get_zone_configs()
+        spi = self._create_spi()
+        spi_lock = threading.Lock()
+        self.zones = []
+        for i, zc in enumerate(zone_configs):
+            sensor = self._create_sensor(spi, zc["spi_cs"], spi_lock)
+            output = Output(zc["gpio_heat"], zc.get("gpio_heat_invert", False))
+            zone = Zone(i, zc, sensor, output)
+            self.zones.append(zone)
+        Board.__init__(self)
 
     def load_libs(self):
         import board
         self.name = board.board_id
 
-    def choose_tempsensor(self):
+    def _create_spi(self):
+        if (hasattr(config, 'spi_sclk') and config.spi_sclk and
+            hasattr(config, 'spi_mosi') and
+            hasattr(config, 'spi_miso')):
+            spi = bitbangio.SPI(config.spi_sclk, config.spi_mosi, config.spi_miso)
+            log.info("Software SPI selected")
+        else:
+            import board
+            spi = board.SPI()
+            log.info("Hardware SPI selected")
+        return spi
+
+    def _create_sensor(self, spi, cs_pin, spi_lock):
         if config.max31855:
-            return Max31855()
+            return Max31855(spi, cs_pin, spi_lock)
         if config.max31856:
-            return Max31856()
+            return Max31856(spi, cs_pin, spi_lock)
 
 class SimulatedBoard(Board):
     '''Simulated board used during simulations.
@@ -105,8 +209,14 @@ class SimulatedBoard(Board):
     '''
     def __init__(self):
         self.name = "simulated"
-        self.temp_sensor = TempSensorSimulated()
-        Board.__init__(self) 
+        zone_configs = get_zone_configs()
+        self.zones = []
+        for i, zc in enumerate(zone_configs):
+            sensor = TempSensorSimulated()
+            output = SimulatedOutput()
+            zone = Zone(i, zc, sensor, output)
+            self.zones.append(zone)
+        Board.__init__(self)
 
 class TempSensor(threading.Thread):
     '''Used by the Board class. Each Board must have
@@ -131,25 +241,15 @@ class TempSensorReal(TempSensor):
     '''real temperature sensor that takes many measurements
        during the time_step
        inputs
-           config.temperature_average_samples 
+           config.temperature_average_samples
     '''
-    def __init__(self):
+    def __init__(self, spi, cs_pin, spi_lock=None):
         TempSensor.__init__(self)
         self.sleeptime = self.time_step / float(config.temperature_average_samples)
-        self.temptracker = TempTracker() 
-        self.spi_setup()
-        self.cs = digitalio.DigitalInOut(config.spi_cs)
-
-    def spi_setup(self):
-        if(hasattr(config,'spi_sclk') and
-           hasattr(config,'spi_mosi') and
-           hasattr(config,'spi_miso')):
-            self.spi = bitbangio.SPI(config.spi_sclk, config.spi_mosi, config.spi_miso)
-            log.info("Software SPI selected for reading thermocouple")
-        else:
-            import board
-            self.spi = board.SPI();
-            log.info("Hardware SPI selected for reading thermocouple")
+        self.temptracker = TempTracker()
+        self.spi = spi
+        self.cs = digitalio.DigitalInOut(cs_pin)
+        self.spi_lock = spi_lock
 
     def get_temperature(self):
         '''read temp from tc and convert if needed'''
@@ -229,15 +329,19 @@ class ThermocoupleTracker(object):
 
 class Max31855(TempSensorReal):
     '''each subclass expected to handle errors and get temperature'''
-    def __init__(self):
-        TempSensorReal.__init__(self)
+    def __init__(self, spi, cs_pin, spi_lock=None):
+        TempSensorReal.__init__(self, spi, cs_pin, spi_lock)
         log.info("thermocouple MAX31855")
         import adafruit_max31855
         self.thermocouple = adafruit_max31855.MAX31855(self.spi, self.cs)
 
     def raw_temp(self):
         try:
-            return self.thermocouple.temperature_NIST
+            if self.spi_lock:
+                with self.spi_lock:
+                    return self.thermocouple.temperature_NIST
+            else:
+                return self.thermocouple.temperature_NIST
         except RuntimeError as rte:
             if rte.args and rte.args[0]:
                 raise Max31855_Error(rte.args[0])
@@ -316,11 +420,11 @@ class Max31856_Error(ThermocoupleError):
 
 class Max31856(TempSensorReal):
     '''each subclass expected to handle errors and get temperature'''
-    def __init__(self):
-        TempSensorReal.__init__(self)
+    def __init__(self, spi, cs_pin, spi_lock=None):
+        TempSensorReal.__init__(self, spi, cs_pin, spi_lock)
         log.info("thermocouple MAX31856")
         import adafruit_max31856
-        self.thermocouple = adafruit_max31856.MAX31856(self.spi,self.cs,
+        self.thermocouple = adafruit_max31856.MAX31856(self.spi, self.cs,
                                         thermocouple_type=config.thermocouple_type)
         if (config.ac_freq_50hz == True):
             self.thermocouple.noise_rejection = 50
@@ -329,15 +433,26 @@ class Max31856(TempSensorReal):
 
     def raw_temp(self):
         # The underlying adafruit library does not throw exceptions
-        # for thermocouple errors. Instead, they are stored in 
+        # for thermocouple errors. Instead, they are stored in
         # dict named self.thermocouple.fault. Here we check that
         # dict for errors and raise an exception.
         # and raise Max31856_Error(message)
-        temp = self.thermocouple.temperature
-        for k,v in self.thermocouple.fault.items():
-            if v:
-                raise Max31856_Error(k)
-        return temp
+        try:
+            if self.spi_lock:
+                with self.spi_lock:
+                    temp = self.thermocouple.temperature
+                    for k, v in self.thermocouple.fault.items():
+                        if v:
+                            raise Max31856_Error(k)
+                    return temp
+            else:
+                temp = self.thermocouple.temperature
+                for k, v in self.thermocouple.fault.items():
+                    if v:
+                        raise Max31856_Error(k)
+                return temp
+        except Max31856_Error:
+            raise
 
 class Oven(threading.Thread):
     '''parent oven class. this has all the common code
@@ -347,6 +462,8 @@ class Oven(threading.Thread):
         self.daemon = True
         self.temperature = 0
         self.time_step = config.sensor_time_wait
+        if not hasattr(self, 'zones'):
+            self.zones = []  # populated by subclass before super().__init__
         self.reset()
 
     def reset(self):
@@ -362,6 +479,18 @@ class Oven(threading.Thread):
         self.heat_rate = 0
         self.heat_rate_temps = []
         self.pid = PID(ki=config.pid_ki, kd=config.pid_kd, kp=config.pid_kp)
+        # Reset per-zone PID controllers
+        for zone in self.zones:
+            zone.pid = PID(
+                ki=zone.pid.ki, kd=zone.pid.kd, kp=zone.pid.kp
+            )
+            zone.heat = 0
+            zone.heat_rate = 0
+            zone.heat_rate_temps = []
+            zone.stall_start_time = None
+            zone.stall_start_temp = None
+            zone.runaway_start_time = None
+            zone.runaway_start_temp = None
         self.catching_up = False
         self.divergence_samples = []  # Track temp divergence for firing log
         # Cooling estimation variables
@@ -440,13 +569,48 @@ class Oven(threading.Thread):
             if time2 > time1:
                 self.heat_rate = ((temp2 - temp1) / (time2 - time1))*3600
 
+    def get_control_temperature(self):
+        """Return the temperature that drives profile progression, per strategy."""
+        if not self.zones:
+            return 0  # zones not yet initialized
+
+        valid_temps = [z.temperature for z in self.zones
+                       if z.critical and z.temperature is not None]
+
+        if not valid_temps:
+            self._emergency_shutdown("All critical zone sensors failed")
+            return 0
+
+        strategy = getattr(config, 'zone_control_strategy', 'coldest')
+
+        if isinstance(strategy, int):
+            if 0 <= strategy < len(self.zones):
+                zone = self.zones[strategy]
+                if zone.temp_sensor.status.over_error_limit():
+                    log.error("zone_control_strategy zone %d ('%s') has TC errors, falling back to coldest" %
+                              (strategy, zone.name))
+                    return min(valid_temps)
+                return zone.temperature
+            log.error("zone_control_strategy index %d out of range, falling back to coldest" % strategy)
+            return min(valid_temps)
+        elif strategy == "coldest":
+            return min(valid_temps)
+        elif strategy == "hottest":
+            return max(valid_temps)
+        elif strategy == "average":
+            return sum(valid_temps) / len(valid_temps)
+        else:
+            return min(valid_temps)
+
     def run_profile(self, profile, startat=0, allow_seek=True):
         log.debug('run_profile run on thread' + threading.current_thread().name)
         runtime = startat * 60
         if allow_seek:
             if self.state == 'IDLE':
                 if config.seek_start:
-                    temp = self.board.temp_sensor.temperature()  # Defined in a subclass
+                    for zone in self.zones:
+                        zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                    temp = self.get_control_temperature()
                     runtime += self.get_start_from_temperature(profile, temp)
 
         self.reset()
@@ -463,7 +627,9 @@ class Oven(threading.Thread):
         # Initialize segment-based control state (v2 profile format)
         if getattr(config, 'use_rate_based_control', False) and hasattr(profile, 'segments'):
             try:
-                current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                for zone in self.zones:
+                    zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                current_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 current_temp = profile.start_temp
 
@@ -505,8 +671,9 @@ class Oven(threading.Thread):
         '''shift the whole schedule forward in time by one time_step
         to wait for the kiln to catch up'''
         if config.kiln_must_catch_up == True:
-            temp = self.board.temp_sensor.temperature() + \
-                config.thermocouple_offset
+            for zone in self.zones:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            temp = self.get_control_temperature()
             # kiln too cold, wait for it to heat up
             if self.target - temp > config.pid_control_window:
                 log.info("kiln must catch up, too cold, shifting schedule")
@@ -548,8 +715,10 @@ class Oven(threading.Thread):
         """
         if not hasattr(self.profile, 'segments') or not self.profile.segments:
             return
-        
-        temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+
+        for zone in self.zones:
+            zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+        temp = self.get_control_temperature()
         segment = self.profile.segments[self.current_segment_index]
         tolerance = getattr(config, 'segment_complete_tolerance', 5)
         
@@ -611,9 +780,9 @@ class Oven(threading.Thread):
         else:
             self.segment_phase = 'ramp'
             self.segment_start_time = datetime.datetime.now()
-            self.segment_start_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            self.segment_start_temp = self.get_control_temperature()
             next_seg = self.profile.segments[self.current_segment_index]
-            log.info("Starting segment %d: rate=%s, target=%.1f" % 
+            log.info("Starting segment %d: rate=%s, target=%.1f" %
                      (self.current_segment_index, next_seg.rate, next_seg.target))
     
     def calculate_rate_based_target(self):
@@ -652,12 +821,12 @@ class Oven(threading.Thread):
             # Pure hold segment
             return segment.target
         
-        # Get current actual temperature
+        # Get current actual temperature (direct sensor read for PID accuracy)
         try:
-            actual_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            actual_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
-        
+
         # Calculate elapsed time since segment start
         if self.segment_start_time:
             elapsed_seconds = (datetime.datetime.now() - self.segment_start_time).total_seconds()
@@ -751,8 +920,8 @@ class Oven(threading.Thread):
             return 0
         
         remaining = 0
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-        
+        current_temp = self.get_control_temperature()
+
         # Time remaining in current segment
         if self.current_segment_index < len(self.profile.segments):
             segment = self.profile.segments[self.current_segment_index]
@@ -855,11 +1024,12 @@ class Oven(threading.Thread):
 
     def reset_if_emergency(self):
         '''reset if the temperature is way TOO HOT, or other critical errors detected'''
-        try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-        except (AttributeError, TypeError):
-            # Can't verify temperature safety without a reading
+
+        # --- Over-temperature check: use the hottest zone (any zone too hot = emergency) ---
+        zone_temps = [z.temperature for z in self.zones if z.temperature]
+        if not zone_temps:
             return
+        temp = max(zone_temps)
 
         if temp >= config.emergency_shutoff_temp:
             log.info("emergency!!! temperature too high")
@@ -868,76 +1038,94 @@ class Oven(threading.Thread):
                     "Temperature too high: %.1f >= %.1f" % (temp, config.emergency_shutoff_temp),
                     status="emergency_stop")
                 return
-        
-        if self.board.temp_sensor.status.over_error_limit():
-            log.info("emergency!!! too many errors in a short period")
-            if config.ignore_tc_too_many_errors == False:
-                self._emergency_shutdown(
-                    "Too many thermocouple errors in a short period",
-                    status="emergency_stop")
-                return
+
+        # --- Per-zone TC error check ---
+        # Critical zones trigger emergency shutdown; advisory zones only log a warning.
+        for zone in self.zones:
+            try:
+                over_limit = zone.temp_sensor.status.over_error_limit()
+            except AttributeError:
+                continue
+            if over_limit:
+                if zone.critical:
+                    log.error("%.2f%% of recent thermocouple readings for zone '%s' failed" %
+                              (zone.temp_sensor.status.error_percent(), zone.name))
+                    if config.ignore_tc_too_many_errors:
+                        log.error("Ignoring TC errors for zone '%s' per config" % zone.name)
+                    else:
+                        self._emergency_shutdown(
+                            "Critical zone '%s' thermocouple error limit exceeded" % zone.name,
+                            status="emergency_stop")
+                        return
+                else:
+                    log.warning("Advisory zone '%s' TC errors over limit — continuing" % zone.name)
 
         # Advanced Safety Checks (Stall & Runaway)
         # Only check these when actively running
         if self.state != "RUNNING":
-            self.stall_start_time = None
-            self.runaway_start_time = None
+            for zone in self.zones:
+                zone.stall_start_time = None
+                zone.runaway_start_time = None
             return
 
         now = time.time()
-        
-        # Get effective PID duty cycle
-        if hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
-            duty_cycle = self.pid.pidstats['out']
-        else:
-            duty_cycle = 1.0 if self.heat else 0.0
 
-        # --- Stall Detection ---
-        # Skip during hold phases — holding at high temp may require near-full power
-        # without temperature rise, which is expected behavior, not a stall.
+        # Determine whether we are in a hold phase or a cooling segment (oven-level context).
+        # These apply to all zones since the profile is shared.
         in_hold_phase = getattr(self, 'segment_phase', None) == 'hold'
-        # If heater is running hard (>95%) but temp isn't rising
-        if duty_cycle > 0.95 and not in_hold_phase:
-            if self.stall_start_time is None:
-                self.stall_start_time = now
-                self.stall_start_temp = temp
-            elif (now - self.stall_start_time) > getattr(config, 'stall_detect_time', 1800):
-                # Check temperature rise over the duration
-                temp_rise = temp - self.stall_start_temp
-                if temp_rise < getattr(config, 'stall_min_temp_rise', 2):
-                    self._emergency_shutdown(
-                        "Kiln STALL: Heater >95%% for %.1f min with only %.1f deg rise" %
-                        ((now - self.stall_start_time)/60, temp_rise),
-                        status="stalled")
-                    return
-        else:
-            self.stall_start_time = None
-
-        # --- Runaway / Stuck Relay Detection ---
-        # Skip during cooling segments — heater is intentionally off and brief
-        # temperature rises from thermal redistribution are expected.
         in_cooling_segment = False
         if hasattr(self, 'profile') and self.profile and hasattr(self.profile, 'segments'):
             seg_idx = getattr(self, 'current_segment_index', 0)
             if seg_idx < len(self.profile.segments):
                 seg_rate = self.profile.segments[seg_idx].rate
-                in_cooling_segment = (seg_rate == "cool" or (isinstance(seg_rate, (int, float)) and seg_rate < 0))
-        # If heater is commanded OFF (<5%) but temp is still rising significantly
-        if duty_cycle < 0.05 and not in_cooling_segment:
-            if self.runaway_start_time is None:
-                self.runaway_start_time = now
-                self.runaway_start_temp = temp
-            elif (now - self.runaway_start_time) > getattr(config, 'runaway_detect_time', 300):
-                # Check temperature rise
-                temp_rise = temp - self.runaway_start_temp
-                if temp_rise > getattr(config, 'runaway_min_temp_rise', 10):
-                    self._emergency_shutdown(
-                        "RUNAWAY heating: Heater <5%% for %.1f min but temp rose %.1f deg" %
-                        ((now - self.runaway_start_time)/60, temp_rise),
-                        status="runaway")
-                    return
-        else:
-            self.runaway_start_time = None
+                in_cooling_segment = (
+                    seg_rate == "cool"
+                    or (isinstance(seg_rate, (int, float)) and seg_rate < 0)
+                )
+
+        # --- Per-zone Stall Detection ---
+        # Skip during hold phases — holding at high temp may require near-full power
+        # without temperature rise, which is expected behavior, not a stall.
+        stall_detect_time = getattr(config, 'stall_detect_time', 1800)
+        stall_min_rise = getattr(config, 'stall_min_temp_rise', 2)
+        for zone in self.zones:
+            duty_cycle = zone.pid.pidstats.get('out', 0) if hasattr(zone.pid, 'pidstats') else (1.0 if zone.heat else 0.0)
+            if duty_cycle > 0.95 and not in_hold_phase:
+                if zone.stall_start_time is None:
+                    zone.stall_start_time = now
+                    zone.stall_start_temp = zone.temperature
+                elif (now - zone.stall_start_time) > stall_detect_time:
+                    temp_rise = zone.temperature - zone.stall_start_temp
+                    if temp_rise < stall_min_rise:
+                        self._emergency_shutdown(
+                            "Zone '%s' STALL: Heater >95%% for %.1f min with only %.1f deg rise" %
+                            (zone.name, (now - zone.stall_start_time) / 60, temp_rise),
+                            status="stalled")
+                        return
+            else:
+                zone.stall_start_time = None
+
+        # --- Per-zone Runaway / Stuck Relay Detection ---
+        # Skip during cooling segments — heater is intentionally off and brief
+        # temperature rises from thermal redistribution are expected.
+        runaway_detect_time = getattr(config, 'runaway_detect_time', 300)
+        runaway_min_rise = getattr(config, 'runaway_min_temp_rise', 10)
+        for zone in self.zones:
+            duty_cycle = zone.pid.pidstats.get('out', 0) if hasattr(zone.pid, 'pidstats') else (1.0 if zone.heat else 0.0)
+            if duty_cycle < 0.05 and not in_cooling_segment:
+                if zone.runaway_start_time is None:
+                    zone.runaway_start_time = now
+                    zone.runaway_start_temp = zone.temperature
+                elif (now - zone.runaway_start_time) > runaway_detect_time:
+                    temp_rise = zone.temperature - zone.runaway_start_temp
+                    if temp_rise > runaway_min_rise:
+                        self._emergency_shutdown(
+                            "Zone '%s' RUNAWAY: Heater <5%% for %.1f min but temp rose %.1f deg" %
+                            (zone.name, (now - zone.runaway_start_time) / 60, temp_rise),
+                            status="runaway")
+                        return
+            else:
+                zone.runaway_start_time = None
 
     def reset_if_schedule_ended(self):
         if self.runtime > self.totaltime:
@@ -962,25 +1150,31 @@ class Oven(threading.Thread):
                 log.error("Failed to save firing log: %s" % e)
 
     def update_cost(self):
-        # Calculate cost based on actual energy delivered (PID output), not just on/off state
-        if hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
-            duty_cycle = self.pid.pidstats['out'] # 0.0 to 1.0
+        # Calculate cost based on average zone heat output (PID duty cycle)
+        if self.zones:
+            avg_heat = sum(z.heat for z in self.zones) / len(self.zones)
+        elif hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
+            avg_heat = self.pid.pidstats['out']  # 0.0 to 1.0
         else:
-            # Fallback for when PID stats aren't available yet or simulation quirks
-            duty_cycle = 1.0 if self.heat else 0.0
+            avg_heat = 1.0 if self.heat else 0.0
 
-        if duty_cycle > 0:
-            cost = (config.kwh_rate * config.kw_elements * duty_cycle) * (self.time_step/3600)
+        if avg_heat > 0:
+            cost = (config.kwh_rate * config.kw_elements * avg_heat) * (self.time_step / 3600)
         else:
             cost = 0
         self.cost = self.cost + cost
     
     def track_divergence(self):
-        """Track temperature divergence (actual vs target) for firing log analysis"""
+        """Track temperature divergence (actual vs target) for firing log analysis.
+        With multi-zone, tracks the max deviation across all zones."""
         try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-            divergence = abs(self.target - temp)
-            self.divergence_samples.append(divergence)
+            if self.zones:
+                max_dev = max(abs(z.target - z.temperature) for z in self.zones)
+                self.divergence_samples.append(max_dev)
+            else:
+                temp = self.get_control_temperature()
+                divergence = abs(self.target - temp)
+                self.divergence_samples.append(divergence)
         except (AttributeError, TypeError):
             # Handle cases where temp sensor isn't ready
             pass
@@ -1138,9 +1332,9 @@ class Oven(threading.Thread):
         """Update cooling estimate based on recent temperature readings"""
         try:
             # Get current temperature
-            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            current_temp = self.get_control_temperature()
             current_time = time.time()
-            
+
             # Add current temperature to tracking list
             self.cooling_temps.append((current_time, current_temp))
             
@@ -1181,48 +1375,92 @@ class Oven(threading.Thread):
             self.cooling_estimate = None
 
     def get_state(self):
-        temp = 0
-        try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-        except AttributeError as error:
-            # this happens at start-up with a simulated oven
-            temp = 0
-            pass
+        # Read all zone temperatures
+        for zone in self.zones:
+            try:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            except (AttributeError, TypeError):
+                pass  # startup race
 
-        # Use wall clock time for heat rate calculation when using rate-based control
+        # Control temperature drives the schedule
+        if self.zones:
+            temp = self.get_control_temperature()
+        else:
+            temp = 0
+
         time_for_heat_rate = self.actual_elapsed_time if getattr(config, 'use_rate_based_control', False) else self.runtime
+
+        # Per-zone heat rates
+        for zone in self.zones:
+            zone.set_heat_rate(time_for_heat_rate)
+
+        # Also update the oven-level heat rate for backward compat
         self.set_heat_rate(time_for_heat_rate, temp)
+
+        # Top-level heat is average across zones
+        avg_heat = sum(z.heat for z in self.zones) / len(self.zones) if self.zones else self.heat
+
+        # Top-level pidstats: use first zone's by default, override with control zone below
+        top_pidstats = self.zones[0].pid.pidstats if self.zones else self.pid.pidstats
 
         state = {
             'cost': self.cost,
             'runtime': self.runtime,
-            'actual_elapsed_time': self.actual_elapsed_time,  # Wall clock time (no seek offset)
+            'actual_elapsed_time': self.actual_elapsed_time,
             'temperature': temp,
             'target': self.target,
             'state': self.state,
-            'heat': self.heat,
+            'heat': avg_heat,
             'heat_rate': self.heat_rate,
             'totaltime': self.totaltime,
             'kwh_rate': config.kwh_rate,
             'currency_type': config.currency_type,
             'profile': self.profile.name if self.profile else None,
-            'pidstats': self.pid.pidstats,
+            'pidstats': top_pidstats,
             'catching_up': self.catching_up,
             'door': 'CLOSED',
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
             'simulate': config.simulate,
             'emergency': self.emergency_reason,
         }
-        
-        # Add segment-based fields when using v2 control
-        if getattr(config, 'use_rate_based_control', False) and hasattr(self, 'profile') and self.profile and hasattr(self.profile, 'segments'):
+
+        # Add zone data when multi-zone
+        if len(self.zones) > 1:
+            zone_temps = [z.temperature for z in self.zones]
+            state['zones'] = [{
+                'index': z.index,
+                'name': z.name,
+                'temperature': z.temperature,
+                'target': z.target,
+                'heat': z.heat,
+                'heat_rate': z.heat_rate,
+                'deviation': z.temperature - z.target if z.target else 0,
+                'critical': z.critical,
+                'pidstats': z.pid.pidstats,
+            } for z in self.zones]
+            state['zone_spread'] = max(zone_temps) - min(zone_temps)
+            state['zone_max_deviation'] = max(
+                abs(z.temperature - z.target) for z in self.zones
+            ) if any(z.target for z in self.zones) else 0
+            state['zone_control_strategy'] = getattr(config, 'zone_control_strategy', 'coldest')
+            # Identify which zone is currently driving the schedule
+            # and update top-level pidstats to reflect the control zone
+            control_temp = temp
+            for z in self.zones:
+                if z.temperature == control_temp:
+                    state['control_zone_index'] = z.index
+                    state['pidstats'] = z.pid.pidstats
+                    break
+
+        # v2 segment fields (keep existing logic)
+        if getattr(config, 'use_rate_based_control', False) and self.profile and hasattr(self.profile, 'segments'):
             state['target_heat_rate'] = self.target_heat_rate
             state['progress'] = self.schedule_progress
             state['current_segment'] = self.current_segment_index
             state['segment_phase'] = self.segment_phase
             state['eta_seconds'] = self.estimate_remaining_time()
             state['total_segments'] = len(self.profile.segments)
-        
+
         return state
 
     def save_state(self):
@@ -1327,7 +1565,7 @@ class Oven(threading.Thread):
             # Get final temperature
             final_temp = 0
             try:
-                final_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                final_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 pass
             
@@ -1409,9 +1647,12 @@ class Oven(threading.Thread):
 
             # Get current temperature
             try:
-                resume_data['temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                resume_data['temperature'] = self.get_control_temperature()
             except (AttributeError, TypeError):
                 pass
+
+            # Save per-zone temperatures
+            resume_data['zone_temperatures'] = [z.temperature for z in self.zones]
 
             # Save segment state for v2 profiles
             if getattr(config, 'use_rate_based_control', False) and hasattr(self.profile, 'segments'):
@@ -1498,7 +1739,7 @@ class Oven(threading.Thread):
 
             # Get current kiln temperature for the frontend display
             try:
-                data['current_temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                data['current_temperature'] = self.get_control_temperature()
             except (AttributeError, TypeError):
                 data['current_temperature'] = None
 
@@ -1624,10 +1865,21 @@ class Oven(threading.Thread):
         except (IOError, json.JSONDecodeError) as e:
             return {"success": False, "error": "Failed to load profile '%s': %s" % (profile_name, e)}
 
-        # Get current temperature
+        # Get current temperature, restoring per-zone temps from resume state as fallback
         try:
-            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            for zone in self.zones:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            current_temp = self.get_control_temperature()
         except (AttributeError, TypeError):
+            zone_temps = resume_data.get('zone_temperatures', None)
+            if zone_temps and len(zone_temps) == len(self.zones):
+                for i, zone in enumerate(self.zones):
+                    zone.temperature = zone_temps[i]
+            else:
+                # Fallback: apply single temperature to all zones
+                single_temp = resume_data.get('temperature', 0)
+                for zone in self.zones:
+                    zone.temperature = single_temp
             current_temp = resume_data.get('temperature', 0)
 
         # V2 segment-based resume with temperature-aware seeking
@@ -1764,7 +2016,9 @@ class Oven(threading.Thread):
 
             # Get current temperature for segment start temp
             try:
-                self.segment_start_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                for zone in self.zones:
+                    zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                self.segment_start_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 self.segment_start_temp = profile.start_temp
 
@@ -1803,11 +2057,11 @@ class Oven(threading.Thread):
                 else:
                     # Check if we should activate cooling mode
                     try:
-                        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                        current_temp = self.get_control_temperature()
                         target_temp = config.cooling_target_temp
                         if config.temp_scale.lower() == "c":
                             target_temp = (target_temp - 32) * 5 / 9
-                        
+
                         # Activate cooling mode if above target temp
                         if current_temp > target_temp:
                             if not self.cooling_mode:
@@ -1888,6 +2142,9 @@ class Oven(threading.Thread):
                     self.update_target_temp()
                     self.reset_if_schedule_ended()
                 
+                # Propagate oven-level target to each zone (with per-zone offset)
+                for zone in self.zones:
+                    zone.target = self.target + zone.temp_offset
                 self.heat_then_cool()
                 self.reset_if_emergency()
                 time.sleep(self.get_loop_sleep_time())
@@ -1901,6 +2158,7 @@ class SimulatedOven(Oven):
 
     def __init__(self):
         self.board = SimulatedBoard()
+        self.zones = self.board.zones
         self.t_env = config.sim_t_env
         self.c_heat = config.sim_c_heat
         self.c_oven = config.sim_c_oven
@@ -1914,6 +2172,19 @@ class SimulatedOven(Oven):
         # Use sim_initial_temp for oven, sim_t_env for heating element (allows testing pre-heated kiln)
         self.t = getattr(config, 'sim_initial_temp', config.sim_t_env)  # deg C or F temp of oven
         self.t_h = self.t_env #deg C temp of heating element
+
+        # Per-zone thermal simulation parameters with slight random variation
+        for i, zone in enumerate(self.zones):
+            variation = 1.0 + random.uniform(-0.1, 0.1)  # +/- 10%
+            zone.sim_p_heat = config.sim_p_heat * variation
+            zone.sim_c_heat = config.sim_c_heat
+            zone.sim_c_oven = config.sim_c_oven
+            zone.sim_R_o_nocool = config.sim_R_o_nocool
+            zone.sim_R_o_cool = config.sim_R_o_cool
+            zone.sim_R_ho_noair = config.sim_R_ho_noair
+            zone.sim_R_ho_air = config.sim_R_ho_air
+            zone.sim_t_heat = zone.temp_sensor.simulated_temperature
+            zone.sim_t_oven = zone.temp_sensor.simulated_temperature
 
         super().__init__()
 
@@ -1982,12 +2253,12 @@ class SimulatedOven(Oven):
         if segment.rate == 0:
             return segment.target
         
-        # Get current actual temperature
+        # Get current actual temperature (direct sensor read for PID accuracy)
         try:
-            actual_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            actual_temp = self.zones[0].temp_sensor.temperature() + self.zones[0].thermocouple_offset
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
-        
+
         # Calculate elapsed time since segment start (with speedup for simulation)
         if self.segment_start_time:
             elapsed_seconds = (datetime.datetime.now() - self.segment_start_time).total_seconds() * self.speedup_factor
@@ -2028,8 +2299,10 @@ class SimulatedOven(Oven):
         """
         if not hasattr(self.profile, 'segments') or not self.profile.segments:
             return
-        
-        temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+
+        for zone in self.zones:
+            zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+        temp = self.get_control_temperature()
         segment = self.profile.segments[self.current_segment_index]
         tolerance = getattr(config, 'segment_complete_tolerance', 5)
         
@@ -2063,87 +2336,90 @@ class SimulatedOven(Oven):
                 if hold_elapsed >= segment.hold:
                     self._advance_segment()
 
-    def heating_energy(self,pid):
-        # using pid here simulates the element being on for
-        # only part of the time_step
-        self.Q_h = self.p_heat * self.time_step * pid
+    def heating_energy(self, zone):
+        # Using zone.heat (PID output) simulates the element being on for
+        # only part of the time_step. Returns energy added to heating element.
+        return zone.heat * zone.sim_p_heat / zone.sim_c_heat * self.time_step
 
-    def temp_changes(self):
-        #temperature change of heat element by heating
-        self.t_h += self.Q_h / self.c_heat
+    def temp_changes(self, zone):
+        dt = self.time_step
+        R_o = zone.sim_R_o_nocool
+        R_ho = zone.sim_R_ho_noair
+        t_heat = zone.sim_t_heat
+        t_oven = zone.sim_t_oven
+        t_env = config.sim_t_env
 
-        #energy flux heat_el -> oven
-        self.p_ho = (self.t_h - self.t) / self.R_ho
+        # Energy flux: heating element -> oven
+        dQ_ho = (t_heat - t_oven) / R_ho * dt
+        t_heat -= dQ_ho / zone.sim_c_heat
+        t_oven += dQ_ho / zone.sim_c_oven
 
-        #temperature change of oven and heating element
-        self.t += self.p_ho * self.time_step / self.c_oven
-        self.t_h -= self.p_ho * self.time_step / self.c_heat
+        # Energy flux: oven -> environment (cooling)
+        dQ_oe = (t_oven - t_env) / R_o * dt
+        t_oven -= dQ_oe / zone.sim_c_oven
 
-        #temperature change of oven by cooling to environment
-        self.p_env = (self.t - self.t_env) / self.R_o_nocool
-        self.t -= self.p_env * self.time_step / self.c_oven
-        self.temperature = self.t
-        self.board.temp_sensor.simulated_temperature = self.t
+        return t_heat, t_oven
 
     def heat_then_cool(self):
         now_simulator = self.start_time + datetime.timedelta(milliseconds = self.runtime * 1000)
-        pid = self.pid.compute(self.target,
-                               self.board.temp_sensor.temperature() +
-                               config.thermocouple_offset, now_simulator)
-
-        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
-        # If kiln is at or above target, don't heat - let it cool naturally
-        cooling_override = False
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
         target_rate = getattr(self, 'target_heat_rate', 0)
         is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
-        if is_natural_cool:
-            # Natural cooling: never heat, regardless of temp vs target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
-        elif is_cooling_segment and current_temp >= self.target:
-            # Controlled cooling: no heat needed while above target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
 
-        heat_on = float(self.time_step * pid)
-        heat_off = float(self.time_step * (1 - pid))
+        for zone in self.zones:
+            # zone.target already set by run() loop (self.target + zone.temp_offset)
+            current_temp = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            zone_pid = zone.pid.compute(zone.target, current_temp, now_simulator)
 
-        self.heating_energy(pid)
-        self.temp_changes()
+            # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+            # If kiln is at or above target, don't heat - let it cool naturally
+            if is_natural_cool:
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
+            elif is_cooling_segment and current_temp >= zone.target:
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
 
-        # self.heat is for the front end to display if the heat is on
-        self.heat = 0.0
-        if heat_on > 0:
-            self.heat = heat_on
+            zone.heat = zone_pid
 
-        log.info("simulation: -> %dW heater: %.0f -> %dW oven: %.0f -> %dW env" % (int(self.p_heat * pid),
-            self.t_h,
-            int(self.p_ho),
-            self.t,
-            int(self.p_env)))
+            # Per-zone thermal model
+            zone.sim_t_heat += self.heating_energy(zone)
+            zone.sim_t_heat, zone.sim_t_oven = self.temp_changes(zone)
+            zone.temp_sensor.simulated_temperature = zone.sim_t_oven
+
+        # Backward-compat: oven-level heat is average of zone heats
+        if self.zones:
+            self.heat = sum(z.heat for z in self.zones) / len(self.zones)
+        else:
+            self.heat = 0.0
+
+        # Update oven-level temperature from control strategy
+        self.temperature = self.get_control_temperature()
+
+        # Also update legacy oven-level sim state for any remaining references
+        if self.zones:
+            self.t = self.zones[0].sim_t_oven
+            self.t_h = self.zones[0].sim_t_heat
 
         time_left = self.totaltime - self.runtime
 
         try:
-            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d" %
-                (self.pid.pidstats['ispoint'],
-                self.pid.pidstats['setpoint'],
-                self.pid.pidstats['err'],
-                self.pid.pidstats['pid'],
-                self.pid.pidstats['p'],
-                self.pid.pidstats['i'],
-                self.pid.pidstats['d'],
-                heat_on,
-                heat_off,
-                self.runtime,
-                self.totaltime,
-                time_left))
+            zone0 = self.zones[0] if self.zones else None
+            if zone0:
+                log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat=%.2f, run_time=%d, total_time=%d, time_left=%d" %
+                    (zone0.pid.pidstats['ispoint'],
+                    zone0.pid.pidstats['setpoint'],
+                    zone0.pid.pidstats['err'],
+                    zone0.pid.pidstats['pid'],
+                    zone0.pid.pidstats['p'],
+                    zone0.pid.pidstats['i'],
+                    zone0.pid.pidstats['d'],
+                    self.heat,
+                    self.runtime,
+                    self.totaltime,
+                    time_left))
         except KeyError:
             pass
 
@@ -2154,7 +2430,7 @@ class RealOven(Oven):
 
     def __init__(self):
         self.board = RealBoard()
-        self.output = Output()
+        self.zones = self.board.zones
         self.reset()
 
         # call parent init
@@ -2165,57 +2441,59 @@ class RealOven(Oven):
 
     def reset(self):
         super().reset()
-        self.output.cool(0)
+        for zone in self.zones:
+            zone.output.cool(0)
 
     def heat_then_cool(self):
-        pid = self.pid.compute(self.target,
-                               self.board.temp_sensor.temperature() +
-                               config.thermocouple_offset, datetime.datetime.now())
+        now = datetime.datetime.now()
+        n = len(self.zones)
+        zone_time_step = self.time_step / n
 
-        # During cooling segments: only heat if kiln is cooling too fast (temp below target)
-        # If kiln is at or above target, don't heat - let it cool naturally
-        cooling_override = False
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
         target_rate = getattr(self, 'target_heat_rate', 0)
-        is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
-        if is_natural_cool:
-            # Natural cooling: never heat, regardless of temp vs target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
-        elif is_cooling_segment and current_temp >= self.target:
-            # Controlled cooling: no heat needed while above target
-            pid = 0
-            self.pid.iterm = 0
-            self.pid.pidstats['out'] = 0
-            cooling_override = True
+        is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
 
-        heat_on = float(self.time_step * pid)
-        heat_off = float(self.time_step * (1 - pid))
+        for zone in self.zones:
+            current_temp = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            zone_pid = zone.pid.compute(zone.target, current_temp, now)
 
-        # self.heat is for the front end to display if the heat is on
-        self.heat = 0.0
-        if heat_on > 0:
-            self.heat = 1.0
+            # During cooling segments: only heat if kiln is cooling too fast (temp below target)
+            # If kiln is at or above target, don't heat - let it cool naturally
+            if is_natural_cool:
+                # Natural cooling: never heat, regardless of temp vs target
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
+            elif is_cooling_segment and current_temp >= zone.target:
+                # Controlled cooling: no heat needed while above target
+                zone_pid = 0
+                zone.pid.iterm = 0
+                zone.pid.pidstats['out'] = 0
 
-        if heat_on:
-            self.output.heat(heat_on)
-        if heat_off:
-            self.output.cool(heat_off)
+            zone.heat = max(zone_pid, 0)
+            heat_on = zone.heat * zone_time_step
+            heat_off = zone_time_step - heat_on
+
+            if heat_on > 0:
+                zone.output.heat(heat_on)
+            # Always call cool() to ensure relay state is explicit
+            zone.output.cool(heat_off)
+
+        # Update oven-level heat as average for backward compat
+        self.heat = sum(z.heat for z in self.zones) / n
+
         time_left = self.totaltime - self.runtime
         try:
-            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d" %
-                (self.pid.pidstats['ispoint'],
-                self.pid.pidstats['setpoint'],
-                self.pid.pidstats['err'],
-                self.pid.pidstats['pid'],
-                self.pid.pidstats['p'],
-                self.pid.pidstats['i'],
-                self.pid.pidstats['d'],
-                heat_on,
-                heat_off,
+            zone0 = self.zones[0]
+            log.info("temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat=%.2f, run_time=%d, total_time=%d, time_left=%d" %
+                (zone0.pid.pidstats['ispoint'],
+                zone0.pid.pidstats['setpoint'],
+                zone0.pid.pidstats['err'],
+                zone0.pid.pidstats['pid'],
+                zone0.pid.pidstats['p'],
+                zone0.pid.pidstats['i'],
+                zone0.pid.pidstats['d'],
+                self.heat,
                 self.runtime,
                 self.totaltime,
                 time_left))
@@ -2685,14 +2963,19 @@ class PID():
         if error < (-1 * config.pid_control_window):
             log.info("kiln outside pid control window, max cooling")
             output = 0
-            # Reset integral term when significantly above target (cooling mode)
-            # This prevents the accumulated heating integral from causing unwanted heat output
-            if self.iterm > 0:
-                log.info("Resetting positive integral term during cooling: %.2f -> 0" % self.iterm)
+            # Reset integral term when outside PID control window (cooling mode)
+            # Both positive and negative integral must be cleared to prevent
+            # the integral from holding the heater off after the kiln cools back down
+            if self.iterm != 0:
+                log.info("Resetting integral term during cooling: %.2f -> 0" % self.iterm)
                 self.iterm = 0
         elif error > (1 * config.pid_control_window):
             log.info("kiln outside pid control window, max heating")
             output = 1
+            # Reset integral when outside PID control window to prevent windup
+            if self.iterm != 0:
+                log.info("Resetting integral term during max heating: %.2f -> 0" % self.iterm)
+                self.iterm = 0
             if config.throttle_below_temp and config.throttle_percent:
                 if setpoint <= config.throttle_below_temp:
                     output = config.throttle_percent/100

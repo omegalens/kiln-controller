@@ -100,6 +100,78 @@ graph.live = {
     lines: { lineWidth: 2 }
 };
 
+// Zone colors and series for multi-zone support
+var defined_zone_colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe', '#fd79a8', '#00cec9'];
+var zone_series = {};  // keyed by zone index
+
+function getPlotSeries() {
+    var series = [graph.profile, graph.live];
+    Object.keys(zone_series).sort().forEach(function(idx) {
+        series.push(zone_series[idx]);
+    });
+    return series;
+}
+
+function updateZonePanel(zones, spread, maxDeviation) {
+    var panel = document.getElementById('zone-panel');
+    if (!panel) return;
+
+    while (panel.firstChild) {
+        panel.removeChild(panel.firstChild);
+    }
+
+    zones.forEach(function(zone) {
+        var color = defined_zone_colors[zone.index % defined_zone_colors.length];
+        var card = document.createElement('div');
+        card.className = 'zone-card';
+        card.style.borderLeftColor = color;
+
+        var nameEl = document.createElement('div');
+        nameEl.className = 'zone-name';
+        nameEl.style.color = color;
+        nameEl.textContent = zone.name;
+        card.appendChild(nameEl);
+
+        var tempEl = document.createElement('div');
+        tempEl.className = 'zone-temp';
+        tempEl.textContent = zone.temperature.toFixed(0) + '\u00B0';
+        card.appendChild(tempEl);
+
+        var targetEl = document.createElement('div');
+        targetEl.className = 'zone-target';
+        targetEl.textContent = '/ ' + zone.target.toFixed(0) + '\u00B0';
+        card.appendChild(targetEl);
+
+        var statsEl = document.createElement('div');
+        statsEl.className = 'zone-stats';
+        var deviation = zone.deviation ? zone.deviation.toFixed(0) : '0';
+        var heatPct = zone.heat ? (zone.heat * 100).toFixed(0) : '0';
+        statsEl.textContent = 'Heat: ' + heatPct + '% | \u0394 ' + deviation + '\u00B0';
+        card.appendChild(statsEl);
+
+        panel.appendChild(card);
+    });
+
+    if (spread !== undefined) {
+        var spreadCard = document.createElement('div');
+        spreadCard.className = 'zone-card';
+        spreadCard.style.borderLeftColor = '#888';
+
+        var spreadName = document.createElement('div');
+        spreadName.className = 'zone-name';
+        spreadName.style.color = '#888';
+        spreadName.textContent = 'Spread';
+        spreadCard.appendChild(spreadName);
+
+        var spreadTemp = document.createElement('div');
+        spreadTemp.className = 'zone-temp';
+        spreadTemp.textContent = spread.toFixed(0) + '\u00B0';
+        spreadCard.appendChild(spreadTemp);
+
+        panel.appendChild(spreadCard);
+    }
+}
+
 // =============================================================================
 // Temperature Color & Duration Width Helpers
 // =============================================================================
@@ -1811,7 +1883,30 @@ $(document).ready(function () {
                         }
                         graph.live.data = downsampled.concat(graph.live.data.slice(half));
                     }
-                    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+                    // Add zone temperature data to zone series
+                    if (x.zones && x.zones.length > 1) {
+                        x.zones.forEach(function(zone) {
+                            if (!zone_series[zone.index]) {
+                                var color = defined_zone_colors[zone.index % defined_zone_colors.length];
+                                zone_series[zone.index] = {
+                                    label: zone.name,
+                                    data: [],
+                                    lines: { show: true, lineWidth: 2 },
+                                    points: { show: false },
+                                    color: color,
+                                    shadowSize: 0
+                                };
+                            }
+                            zone_series[zone.index].data.push([xTime, zone.temperature]);
+                        });
+                        updateZonePanel(x.zones, x.zone_spread, x.zone_max_deviation);
+                        document.getElementById('zone-panel').style.display = 'flex';
+                    } else {
+                        document.getElementById('zone-panel').style.display = 'none';
+                    }
+
+                    graph.plot = $.plot("#graph_container", getPlotSeries(), getOptions());
                 }
 
                 var actualRate = clampRate(parseInt(x.heat_rate) || 0);
@@ -1850,6 +1945,12 @@ $(document).ready(function () {
                     // Brief delay to let the backend save resume state
                     // Timer will start automatically if resume state exists
                     setTimeout(function () { checkResumeState(); }, 1500);
+                }
+
+                // Clear zone data when not running
+                if (state == "IDLE") {
+                    zone_series = {};
+                    document.getElementById('zone-panel').style.display = 'none';
                 }
             }
 
