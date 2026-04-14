@@ -46,6 +46,88 @@ class Duplogger():
 
 duplog = Duplogger().logref()
 
+
+def get_zone_configs():
+    """Return zone configs. If none defined, synthesize one from legacy scalars."""
+    if hasattr(config, 'zones') and config.zones:
+        return config.zones
+    return [{
+        "name": "Kiln",
+        "spi_cs": getattr(config, 'spi_cs', None),
+        "gpio_heat": getattr(config, 'gpio_heat', None),
+        "gpio_heat_invert": getattr(config, 'gpio_heat_invert', False),
+        "pid_kp": config.pid_kp,
+        "pid_ki": config.pid_ki,
+        "pid_kd": config.pid_kd,
+        "thermocouple_offset": config.thermocouple_offset,
+        "temp_offset": 0,
+        "critical": True,
+    }]
+
+
+class Zone:
+    """A single heating zone: thermocouple + PID + relay output."""
+    def __init__(self, index, zone_config, temp_sensor, output):
+        self.index = index
+        self.name = zone_config["name"]
+        self.temp_offset = zone_config.get("temp_offset", 0)
+        self.critical = zone_config.get("critical", True)
+        self.thermocouple_offset = zone_config.get("thermocouple_offset", 0)
+
+        self.temp_sensor = temp_sensor
+        self.output = output
+        self.pid = PID(
+            kp=zone_config.get("pid_kp", config.pid_kp),
+            ki=zone_config.get("pid_ki", config.pid_ki),
+            kd=zone_config.get("pid_kd", config.pid_kd),
+        )
+        self.temperature = 0
+        self.target = 0
+        self.heat = 0
+        self.heat_rate = 0
+        self.heat_rate_temps = []
+
+        # Per-zone safety tracking
+        self.stall_start_time = None
+        self.stall_start_temp = None
+        self.runaway_start_time = None
+        self.runaway_start_temp = None
+
+    def set_heat_rate(self, runtime):
+        """Calculate heat rate for this zone. Mirrors Oven.set_heat_rate()."""
+        min_samples = 10
+        rate_window_seconds = getattr(config, 'heat_rate_window_seconds', 300)
+        self.heat_rate_temps.append((runtime, self.temperature))
+        if len(self.heat_rate_temps) > min_samples:
+            cutoff_time = runtime - rate_window_seconds
+            filtered = [(t, tp) for t, tp in self.heat_rate_temps if t >= cutoff_time]
+            if len(filtered) >= min_samples:
+                self.heat_rate_temps = filtered
+            else:
+                self.heat_rate_temps = self.heat_rate_temps[-min_samples:]
+        if len(self.heat_rate_temps) > 1000:
+            self.heat_rate_temps = self.heat_rate_temps[-1000:]
+        if len(self.heat_rate_temps) >= 2:
+            time2 = self.heat_rate_temps[-1][0]
+            time1 = self.heat_rate_temps[0][0]
+            temp2 = self.heat_rate_temps[-1][1]
+            temp1 = self.heat_rate_temps[0][1]
+            if time2 > time1:
+                self.heat_rate = ((temp2 - temp1) / (time2 - time1)) * 3600
+
+
+class SimulatedOutput:
+    """No-op output for simulated zones. No GPIO, no sleeping."""
+    def __init__(self):
+        self.active = False
+
+    def heat(self, sleepfor):
+        self.active = True
+
+    def cool(self, sleepfor):
+        self.active = False
+
+
 class Output(object):
     '''This represents a GPIO output that controls a solid
     state relay to turn the kiln elements on and off.
