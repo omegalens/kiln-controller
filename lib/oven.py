@@ -1355,28 +1355,35 @@ class Oven(threading.Thread):
         else:
             temp = 0
 
-        # Use wall clock time for heat rate calculation when using rate-based control
         time_for_heat_rate = self.actual_elapsed_time if getattr(config, 'use_rate_based_control', False) else self.runtime
-        self.set_heat_rate(time_for_heat_rate, temp)
 
         # Per-zone heat rates
         for zone in self.zones:
             zone.set_heat_rate(time_for_heat_rate)
 
+        # Also update the oven-level heat rate for backward compat
+        self.set_heat_rate(time_for_heat_rate, temp)
+
+        # Top-level heat is average across zones
+        avg_heat = sum(z.heat for z in self.zones) / len(self.zones) if self.zones else self.heat
+
+        # Top-level pidstats: use first zone's by default, override with control zone below
+        top_pidstats = self.zones[0].pid.pidstats if self.zones else self.pid.pidstats
+
         state = {
             'cost': self.cost,
             'runtime': self.runtime,
-            'actual_elapsed_time': self.actual_elapsed_time,  # Wall clock time (no seek offset)
+            'actual_elapsed_time': self.actual_elapsed_time,
             'temperature': temp,
             'target': self.target,
             'state': self.state,
-            'heat': sum(z.heat for z in self.zones) / len(self.zones) if self.zones else self.heat,
+            'heat': avg_heat,
             'heat_rate': self.heat_rate,
             'totaltime': self.totaltime,
             'kwh_rate': config.kwh_rate,
             'currency_type': config.currency_type,
             'profile': self.profile.name if self.profile else None,
-            'pidstats': self.zones[0].pid.pidstats if self.zones else self.pid.pidstats,
+            'pidstats': top_pidstats,
             'catching_up': self.catching_up,
             'door': 'CLOSED',
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
@@ -1403,7 +1410,8 @@ class Oven(threading.Thread):
                 abs(z.temperature - z.target) for z in self.zones
             ) if any(z.target for z in self.zones) else 0
             state['zone_control_strategy'] = getattr(config, 'zone_control_strategy', 'coldest')
-            # Identify which zone is driving the schedule and use its pidstats
+            # Identify which zone is currently driving the schedule
+            # and update top-level pidstats to reflect the control zone
             control_temp = temp
             for z in self.zones:
                 if z.temperature == control_temp:
@@ -1411,15 +1419,15 @@ class Oven(threading.Thread):
                     state['pidstats'] = z.pid.pidstats
                     break
 
-        # Add segment-based fields when using v2 control
-        if getattr(config, 'use_rate_based_control', False) and hasattr(self, 'profile') and self.profile and hasattr(self.profile, 'segments'):
+        # v2 segment fields (keep existing logic)
+        if getattr(config, 'use_rate_based_control', False) and self.profile and hasattr(self.profile, 'segments'):
             state['target_heat_rate'] = self.target_heat_rate
             state['progress'] = self.schedule_progress
             state['current_segment'] = self.current_segment_index
             state['segment_phase'] = self.segment_phase
             state['eta_seconds'] = self.estimate_remaining_time()
             state['total_segments'] = len(self.profile.segments)
-        
+
         return state
 
     def save_state(self):
