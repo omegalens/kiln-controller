@@ -2272,7 +2272,7 @@ class SimulatedOven(Oven):
         rate_based_ceiling = start_temp + (segment.rate * elapsed_hours)
         
         # Calculate lead for PID responsiveness
-        lookahead_seconds = getattr(config, 'rate_lookahead_seconds', 60) * self.speedup_factor
+        lookahead_seconds = getattr(config, 'rate_lookahead_seconds', 60)
         effective_lookahead = min(elapsed_seconds, lookahead_seconds)
         effective_lookahead_hours = effective_lookahead / 3600
         raw_lead = segment.rate * effective_lookahead_hours
