@@ -160,9 +160,20 @@ def handle_api():
             return {"success": False, "error": "No temperature provided"}
         try:
             temp = float(temp)
-            oven.board.temp_sensor.simulated_temperature = temp
-            log.info("Simulated temperature set to %s" % temp)
-            return {"success": True, "temperature": temp}
+            zone_index = bottle.request.json.get('zone_index', None)
+            if zone_index is not None:
+                zone_index = int(zone_index)
+                if 0 <= zone_index < len(oven.zones):
+                    oven.zones[zone_index].temp_sensor.simulated_temperature = temp
+                    log.info("Simulated temperature set to %s for zone %d" % (temp, zone_index))
+                    return {"success": True, "temperature": temp, "zone_index": zone_index}
+                else:
+                    return {"success": False, "error": "zone_index %d out of range (0-%d)" % (zone_index, len(oven.zones) - 1)}
+            else:
+                for zone in oven.zones:
+                    zone.temp_sensor.simulated_temperature = temp
+                log.info("Simulated temperature set to %s for all zones" % temp)
+                return {"success": True, "temperature": temp}
         except (ValueError, AttributeError) as e:
             return {"success": False, "error": str(e)}
     

@@ -1647,6 +1647,9 @@ class Oven(threading.Thread):
             except (AttributeError, TypeError):
                 pass
 
+            # Save per-zone temperatures
+            resume_data['zone_temperatures'] = [z.temperature for z in self.zones]
+
             # Save segment state for v2 profiles
             if getattr(config, 'use_rate_based_control', False) and hasattr(self.profile, 'segments'):
                 resume_data['current_segment'] = self.current_segment_index
@@ -1858,12 +1861,21 @@ class Oven(threading.Thread):
         except (IOError, json.JSONDecodeError) as e:
             return {"success": False, "error": "Failed to load profile '%s': %s" % (profile_name, e)}
 
-        # Get current temperature
+        # Get current temperature, restoring per-zone temps from resume state as fallback
         try:
             for zone in self.zones:
                 zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
             current_temp = self.get_control_temperature()
         except (AttributeError, TypeError):
+            zone_temps = resume_data.get('zone_temperatures', None)
+            if zone_temps and len(zone_temps) == len(self.zones):
+                for i, zone in enumerate(self.zones):
+                    zone.temperature = zone_temps[i]
+            else:
+                # Fallback: apply single temperature to all zones
+                single_temp = resume_data.get('temperature', 0)
+                for zone in self.zones:
+                    zone.temperature = single_temp
             current_temp = resume_data.get('temperature', 0)
 
         # V2 segment-based resume with temperature-aware seeking
