@@ -1019,15 +1019,12 @@ class Oven(threading.Thread):
 
     def reset_if_emergency(self):
         '''reset if the temperature is way TOO HOT, or other critical errors detected'''
-        try:
-            # Check the hottest zone — any zone overheating is an emergency
-            zone_temps = []
-            for zone in self.zones:
-                zone_temps.append(zone.temp_sensor.temperature() + zone.thermocouple_offset)
-            temp = max(zone_temps)
-        except (AttributeError, TypeError):
-            # Can't verify temperature safety without a reading
+
+        # --- Over-temperature check: use the hottest zone (any zone too hot = emergency) ---
+        zone_temps = [z.temperature for z in self.zones if z.temperature]
+        if not zone_temps:
             return
+        temp = max(zone_temps)
 
         if temp >= config.emergency_shutoff_temp:
             log.info("emergency!!! temperature too high")
@@ -1037,75 +1034,93 @@ class Oven(threading.Thread):
                     status="emergency_stop")
                 return
 
-        if any(z.temp_sensor.status.over_error_limit() for z in self.zones):
-            log.info("emergency!!! too many errors in a short period")
-            if config.ignore_tc_too_many_errors == False:
-                self._emergency_shutdown(
-                    "Too many thermocouple errors in a short period",
-                    status="emergency_stop")
-                return
+        # --- Per-zone TC error check ---
+        # Critical zones trigger emergency shutdown; advisory zones only log a warning.
+        for zone in self.zones:
+            try:
+                over_limit = zone.temp_sensor.status.over_error_limit()
+            except AttributeError:
+                continue
+            if over_limit:
+                if zone.critical:
+                    log.error("%.2f%% of recent thermocouple readings for zone '%s' failed" %
+                              (zone.temp_sensor.status.error_percent(), zone.name))
+                    if config.ignore_tc_too_many_errors:
+                        log.error("Ignoring TC errors for zone '%s' per config" % zone.name)
+                    else:
+                        self._emergency_shutdown(
+                            "Critical zone '%s' thermocouple error limit exceeded" % zone.name,
+                            status="emergency_stop")
+                        return
+                else:
+                    log.warning("Advisory zone '%s' TC errors over limit — continuing" % zone.name)
 
         # Advanced Safety Checks (Stall & Runaway)
         # Only check these when actively running
         if self.state != "RUNNING":
-            self.stall_start_time = None
-            self.runaway_start_time = None
+            for zone in self.zones:
+                zone.stall_start_time = None
+                zone.runaway_start_time = None
             return
 
         now = time.time()
-        
-        # Get effective PID duty cycle
-        if hasattr(self, 'pid') and hasattr(self.pid, 'pidstats') and 'out' in self.pid.pidstats:
-            duty_cycle = self.pid.pidstats['out']
-        else:
-            duty_cycle = 1.0 if self.heat else 0.0
 
-        # --- Stall Detection ---
-        # Skip during hold phases — holding at high temp may require near-full power
-        # without temperature rise, which is expected behavior, not a stall.
+        # Determine whether we are in a hold phase or a cooling segment (oven-level context).
+        # These apply to all zones since the profile is shared.
         in_hold_phase = getattr(self, 'segment_phase', None) == 'hold'
-        # If heater is running hard (>95%) but temp isn't rising
-        if duty_cycle > 0.95 and not in_hold_phase:
-            if self.stall_start_time is None:
-                self.stall_start_time = now
-                self.stall_start_temp = temp
-            elif (now - self.stall_start_time) > getattr(config, 'stall_detect_time', 1800):
-                # Check temperature rise over the duration
-                temp_rise = temp - self.stall_start_temp
-                if temp_rise < getattr(config, 'stall_min_temp_rise', 2):
-                    self._emergency_shutdown(
-                        "Kiln STALL: Heater >95%% for %.1f min with only %.1f deg rise" %
-                        ((now - self.stall_start_time)/60, temp_rise),
-                        status="stalled")
-                    return
-        else:
-            self.stall_start_time = None
-
-        # --- Runaway / Stuck Relay Detection ---
-        # Skip during cooling segments — heater is intentionally off and brief
-        # temperature rises from thermal redistribution are expected.
         in_cooling_segment = False
         if hasattr(self, 'profile') and self.profile and hasattr(self.profile, 'segments'):
             seg_idx = getattr(self, 'current_segment_index', 0)
             if seg_idx < len(self.profile.segments):
                 seg_rate = self.profile.segments[seg_idx].rate
-                in_cooling_segment = (seg_rate == "cool" or (isinstance(seg_rate, (int, float)) and seg_rate < 0))
-        # If heater is commanded OFF (<5%) but temp is still rising significantly
-        if duty_cycle < 0.05 and not in_cooling_segment:
-            if self.runaway_start_time is None:
-                self.runaway_start_time = now
-                self.runaway_start_temp = temp
-            elif (now - self.runaway_start_time) > getattr(config, 'runaway_detect_time', 300):
-                # Check temperature rise
-                temp_rise = temp - self.runaway_start_temp
-                if temp_rise > getattr(config, 'runaway_min_temp_rise', 10):
-                    self._emergency_shutdown(
-                        "RUNAWAY heating: Heater <5%% for %.1f min but temp rose %.1f deg" %
-                        ((now - self.runaway_start_time)/60, temp_rise),
-                        status="runaway")
-                    return
-        else:
-            self.runaway_start_time = None
+                in_cooling_segment = (
+                    seg_rate == "cool"
+                    or (isinstance(seg_rate, (int, float)) and seg_rate < 0)
+                )
+
+        # --- Per-zone Stall Detection ---
+        # Skip during hold phases — holding at high temp may require near-full power
+        # without temperature rise, which is expected behavior, not a stall.
+        stall_detect_time = getattr(config, 'stall_detect_time', 1800)
+        stall_min_rise = getattr(config, 'stall_min_temp_rise', 2)
+        for zone in self.zones:
+            duty_cycle = zone.pid.pidstats.get('out', 0) if hasattr(zone.pid, 'pidstats') else (1.0 if zone.heat else 0.0)
+            if duty_cycle > 0.95 and not in_hold_phase:
+                if zone.stall_start_time is None:
+                    zone.stall_start_time = now
+                    zone.stall_start_temp = zone.temperature
+                elif (now - zone.stall_start_time) > stall_detect_time:
+                    temp_rise = zone.temperature - zone.stall_start_temp
+                    if temp_rise < stall_min_rise:
+                        self._emergency_shutdown(
+                            "Zone '%s' STALL: Heater >95%% for %.1f min with only %.1f deg rise" %
+                            (zone.name, (now - zone.stall_start_time) / 60, temp_rise),
+                            status="stalled")
+                        return
+            else:
+                zone.stall_start_time = None
+
+        # --- Per-zone Runaway / Stuck Relay Detection ---
+        # Skip during cooling segments — heater is intentionally off and brief
+        # temperature rises from thermal redistribution are expected.
+        runaway_detect_time = getattr(config, 'runaway_detect_time', 300)
+        runaway_min_rise = getattr(config, 'runaway_min_temp_rise', 10)
+        for zone in self.zones:
+            duty_cycle = zone.pid.pidstats.get('out', 0) if hasattr(zone.pid, 'pidstats') else (1.0 if zone.heat else 0.0)
+            if duty_cycle < 0.05 and not in_cooling_segment:
+                if zone.runaway_start_time is None:
+                    zone.runaway_start_time = now
+                    zone.runaway_start_temp = zone.temperature
+                elif (now - zone.runaway_start_time) > runaway_detect_time:
+                    temp_rise = zone.temperature - zone.runaway_start_temp
+                    if temp_rise > runaway_min_rise:
+                        self._emergency_shutdown(
+                            "Zone '%s' RUNAWAY: Heater <5%% for %.1f min but temp rose %.1f deg" %
+                            (zone.name, (now - zone.runaway_start_time) / 60, temp_rise),
+                            status="runaway")
+                        return
+            else:
+                zone.runaway_start_time = None
 
     def reset_if_schedule_ended(self):
         if self.runtime > self.totaltime:

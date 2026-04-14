@@ -275,3 +275,141 @@ class TestGetControlTemperature:
             assert oven.emergency_reason is not None
         finally:
             config.zone_control_strategy = original
+
+
+# =============================================================================
+# Test Per-Zone Safety Checks (reset_if_emergency)
+# =============================================================================
+
+class TestPerZoneSafety:
+    """Test per-zone thermocouple error, stall, and runaway detection."""
+
+    def _make_zone(self, temp, heat, critical=True, error_pct=0):
+        from lib.oven import Zone
+        zone_config = {"name": "Test", "critical": critical}
+        zone = Zone(index=0, zone_config=zone_config, temp_sensor=None, output=None)
+        zone.temperature = temp
+        zone.heat = heat
+
+        class MockStatus:
+            def __init__(self, pct):
+                self._pct = pct
+            def over_error_limit(self):
+                return self._pct > 30
+            def error_percent(self):
+                return self._pct
+        class MockSensor:
+            def __init__(self, pct):
+                self.status = MockStatus(pct)
+        zone.temp_sensor = MockSensor(error_pct)
+        zone.pid = type('PID', (), {'pidstats': {'out': heat}})()
+        return zone
+
+    def _make_oven_with_zones(self, zones):
+        """Create a minimal Oven-like object for testing reset_if_emergency."""
+        class OvenLike:
+            def __init__(self, zones):
+                self.zones = zones
+                self.emergency_reason = None
+                self.state = "RUNNING"
+                self.profile = None
+                self.current_segment_index = 0
+                self.segment_phase = 'ramp'
+            def _emergency_shutdown(self, reason, status=None):
+                self.emergency_reason = reason
+                self.state = "IDLE"
+        oven = OvenLike(zones)
+        from lib.oven import Oven
+        oven.reset_if_emergency = Oven.reset_if_emergency.__get__(oven, OvenLike)
+        return oven
+
+    def test_critical_zone_tc_error_calls_emergency_shutdown(self):
+        """Critical zone over error limit should trigger emergency shutdown."""
+        original_ignore = config.ignore_tc_too_many_errors
+        try:
+            config.ignore_tc_too_many_errors = False
+            z1 = self._make_zone(2000, 0.5, critical=True, error_pct=50)
+            z2 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+            oven = self._make_oven_with_zones([z1, z2])
+            oven.reset_if_emergency()
+            assert oven.emergency_reason is not None
+            assert (
+                "zone" in oven.emergency_reason.lower()
+                or "thermocouple" in oven.emergency_reason.lower()
+            )
+        finally:
+            config.ignore_tc_too_many_errors = original_ignore
+
+    def test_advisory_zone_tc_error_does_not_stop(self):
+        """Advisory zone over error limit should NOT trigger emergency."""
+        original_ignore = config.ignore_tc_too_many_errors
+        try:
+            config.ignore_tc_too_many_errors = False
+            z1 = self._make_zone(2000, 0.5, critical=False, error_pct=50)
+            z2 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+            oven = self._make_oven_with_zones([z1, z2])
+            oven.reset_if_emergency()
+            assert oven.emergency_reason is None
+            assert oven.state == "RUNNING"
+        finally:
+            config.ignore_tc_too_many_errors = original_ignore
+
+    def test_stall_detection_triggers_per_zone(self):
+        """A single stalling zone should trigger emergency even when other zones are healthy."""
+        z1 = self._make_zone(2000, 0.99, critical=True, error_pct=0)
+        z1.stall_start_time = time.time() - (config.stall_detect_time + 10)
+        z1.stall_start_temp = 1999  # only 1 degree rise, below stall_min_temp_rise
+        z2 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+        oven = self._make_oven_with_zones([z1, z2])
+        oven.reset_if_emergency()
+        assert oven.emergency_reason is not None
+        assert "stall" in oven.emergency_reason.lower()
+
+    def test_no_stall_when_temp_rising(self):
+        """No stall emergency when temperature is rising sufficiently."""
+        z1 = self._make_zone(2050, 0.99, critical=True, error_pct=0)
+        z1.stall_start_time = time.time() - (config.stall_detect_time + 10)
+        z1.stall_start_temp = 2000  # 50 degree rise — above stall_min_temp_rise
+        oven = self._make_oven_with_zones([z1])
+        oven.reset_if_emergency()
+        assert oven.emergency_reason is None
+
+    def test_stall_timer_reset_when_duty_low(self):
+        """stall_start_time should be cleared when duty cycle drops below 0.95."""
+        z1 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+        z1.stall_start_time = time.time() - 100
+        z1.stall_start_temp = 1990
+        oven = self._make_oven_with_zones([z1])
+        oven.reset_if_emergency()
+        assert z1.stall_start_time is None
+        assert oven.emergency_reason is None
+
+    def test_runaway_detection_triggers_per_zone(self):
+        """A runaway zone should trigger emergency even when other zones are normal."""
+        z1 = self._make_zone(2020, 0.01, critical=True, error_pct=0)
+        z1.runaway_start_time = time.time() - (config.runaway_detect_time + 10)
+        z1.runaway_start_temp = 2000  # 20 degree rise while heater off
+        z2 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+        oven = self._make_oven_with_zones([z1, z2])
+        oven.reset_if_emergency()
+        assert oven.emergency_reason is not None
+        assert "runaway" in oven.emergency_reason.lower()
+
+    def test_no_runaway_when_temp_stable(self):
+        """No runaway emergency when temperature is not rising significantly."""
+        z1 = self._make_zone(2001, 0.01, critical=True, error_pct=0)
+        z1.runaway_start_time = time.time() - (config.runaway_detect_time + 10)
+        z1.runaway_start_temp = 2000  # only 1 degree rise
+        oven = self._make_oven_with_zones([z1])
+        oven.reset_if_emergency()
+        assert oven.emergency_reason is None
+
+    def test_runaway_timer_reset_when_heater_on(self):
+        """runaway_start_time should be cleared when duty cycle is above 0.05."""
+        z1 = self._make_zone(2000, 0.5, critical=True, error_pct=0)
+        z1.runaway_start_time = time.time() - 100
+        z1.runaway_start_temp = 1980
+        oven = self._make_oven_with_zones([z1])
+        oven.reset_if_emergency()
+        assert z1.runaway_start_time is None
+        assert oven.emergency_reason is None
