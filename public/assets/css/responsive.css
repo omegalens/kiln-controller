@@ -197,7 +197,9 @@
 
   .metric-label {
     margin-bottom: 0;
-    flex: 1;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-right: var(--spacing-sm);
   }
 
   .metric-value {

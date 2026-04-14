@@ -300,6 +300,11 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Est. column (5th) should not wrap */
+.segment-table td:nth-child(5) {
+  white-space: nowrap;
+}
+
 .segment-table input {
   width: 70px;
   padding: var(--spacing-xs) var(--spacing-sm);
@@ -674,10 +679,13 @@
   gap: var(--spacing-md);
   overflow-x: auto;
   scroll-behavior: smooth;
-  padding: var(--spacing-sm) 0;
+  padding: var(--spacing-sm) var(--spacing-md) var(--spacing-sm) 0;
   flex: 1;
   scrollbar-width: thin;
   scrollbar-color: var(--border-widget) transparent;
+  /* Fade mask to hint at scrollable content */
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent);
 }
 
 .gallery-scroll::-webkit-scrollbar {

@@ -101,7 +101,7 @@ graph.live = {
 };
 
 // Zone colors and series for multi-zone support
-var defined_zone_colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a29bfe', '#fd79a8', '#00cec9'];
+var defined_zone_colors = ['#e74c3c', '#3498db', '#f39c12', '#27ae60', '#9b59b6', '#95a5a6'];
 var zone_series = {};  // keyed by zone index
 
 function getPlotSeries() {
@@ -155,11 +155,11 @@ function updateZonePanel(zones, spread, maxDeviation) {
     if (spread !== undefined) {
         var spreadCard = document.createElement('div');
         spreadCard.className = 'zone-card';
-        spreadCard.style.borderLeftColor = '#888';
+        spreadCard.style.borderLeftColor = '#5d6d7e';
 
         var spreadName = document.createElement('div');
         spreadName.className = 'zone-name';
-        spreadName.style.color = '#888';
+        spreadName.style.color = '#5d6d7e';
         spreadName.textContent = 'Spread';
         spreadCard.appendChild(spreadName);
 
@@ -380,7 +380,7 @@ function updateProfile(id) {
 
     $('#sel_prof').text(profiles[id].name);
     $('#sel_prof_eta').html(job_time);
-    $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + ': ' + cost + ')');
+    $('#sel_prof_cost').html(kwh + ' kWh (' + currency_type + cost + ')');
 
     graph.profile.data = displayData;
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
