@@ -1893,6 +1893,7 @@ $(document).ready(function () {
                                     label: zone.name,
                                     data: [],
                                     lines: { show: true, lineWidth: 2 },
+                                    points: { show: false },
                                     color: color,
                                     shadowSize: 0
                                 };
