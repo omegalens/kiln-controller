@@ -442,6 +442,56 @@
 }
 
 /* ============================================
+   ZONE SUMMARY PANEL
+   ============================================ */
+
+.graph-zone-wrapper {
+    display: flex;
+    gap: 12px;
+}
+
+.graph-zone-wrapper .graph-area {
+    flex: 1;
+    min-width: 0;
+}
+
+.zone-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 180px;
+    max-width: 200px;
+}
+
+.zone-card {
+    background: var(--bg-secondary, #2a2a3e);
+    border-radius: 6px;
+    padding: 10px;
+    border-left: 3px solid var(--zone-color, #ff6b6b);
+}
+
+.zone-card .zone-name {
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.zone-card .zone-temp {
+    font-size: 1.1em;
+    color: var(--text-primary, #ccc);
+}
+
+.zone-card .zone-target {
+    font-size: 0.8em;
+    color: var(--text-secondary, #666);
+}
+
+.zone-card .zone-stats {
+    font-size: 0.75em;
+    color: var(--text-muted, #888);
+    margin-top: 4px;
+}
+
+/* ============================================
    ALERT MESSAGE BOX
    ============================================ */
 

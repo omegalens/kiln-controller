@@ -48,15 +48,18 @@
     <section class="widget widget-graph">
       <h2 class="widget-title">Firing Curve</h2>
       <div class="widget-content">
-        <div class="graph-area">
-          <div id="graph_container"></div>
-          <!-- Historical View Overlay -->
-          <div class="historical-overlay" id="historical-overlay" style="display:none;">
-            <div class="historical-header">
-              <span class="historical-title" id="historical-title">Historical Firing</span>
-              <button class="historical-close" id="historical-close">✕</button>
+        <div class="graph-zone-wrapper">
+          <div class="graph-area">
+            <div id="graph_container"></div>
+            <!-- Historical View Overlay -->
+            <div class="historical-overlay" id="historical-overlay" style="display:none;">
+              <div class="historical-header">
+                <span class="historical-title" id="historical-title">Historical Firing</span>
+                <button class="historical-close" id="historical-close">✕</button>
+              </div>
             </div>
           </div>
+          <div id="zone-panel" class="zone-panel" style="display:none;"></div>
         </div>
         <div class="graph-stats">
           <div class="graph-stat">

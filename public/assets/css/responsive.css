@@ -383,6 +383,26 @@
 }
 
 /* ============================================
+   ZONE PANEL RESPONSIVE
+   ============================================ */
+
+@media (max-width: 768px) {
+    .graph-zone-wrapper {
+        flex-direction: column;
+    }
+    .zone-panel {
+        flex-direction: row;
+        flex-wrap: wrap;
+        max-width: none;
+        min-width: auto;
+    }
+    .zone-card {
+        flex: 1;
+        min-width: 140px;
+    }
+}
+
+/* ============================================
    ACCESSIBILITY
    ============================================ */
 
