@@ -57,6 +57,16 @@ class MQTTClient:
             self.connected = True
             client.publish(f"{self.prefix}/available", "online", qos=1, retain=True)
             client.subscribe(f"{self.prefix}/command")
+            # Publish zone names (retained, once on connect)
+            zone_configs = []
+            try:
+                from lib.oven import get_zone_configs
+                zone_configs = get_zone_configs()
+            except Exception:
+                pass
+            for i, zc in enumerate(zone_configs):
+                client.publish(f"{self.prefix}/zone/{i}/name",
+                               zc.get("name", f"Zone {i}"), qos=1, retain=True)
         else:
             log.error("MQTT connect returned rc=%s" % rc)
 
@@ -140,6 +150,32 @@ class MQTTClient:
             if self._last_values.get(key) != str_val:
                 self._last_values[key] = str_val
                 self._publish_retained(key, str_val)
+
+        # Per-zone topics
+        zones = state_dict.get("zones", [])
+        for zone in zones:
+            i = zone["index"]
+            zone_topics = {
+                "temperature": zone.get("temperature"),
+                "target": zone.get("target"),
+                "heat": round(zone.get("heat", 0), 3),
+            }
+            for key, value in zone_topics.items():
+                topic = f"{self.prefix}/zone/{i}/{key}"
+                last_key = f"zone/{i}/{key}"
+                if value is not None and self._last_values.get(last_key) != value:
+                    self.client.publish(topic, str(value), qos=0, retain=True)
+                    self._last_values[last_key] = value
+
+        # Aggregate zone metrics
+        if zones:
+            for key in ("zone_spread", "zone_max_deviation"):
+                value = state_dict.get(key)
+                if value is not None and self._last_values.get(key) != value:
+                    self.client.publish(
+                        f"{self.prefix}/{key}", str(round(value, 1)),
+                        qos=0, retain=True)
+                    self._last_values[key] = value
 
     def _publish_retained(self, subtopic, payload):
         try:

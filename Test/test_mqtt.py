@@ -238,3 +238,64 @@ class TestTopicPrefix:
         topics = [c[0][0] for c in client.client.publish.call_args_list]
         assert any(t.startswith("mykiln/") for t in topics)
         assert not any(t.startswith("kiln/") for t in topics)
+
+
+class TestMultiZonePublish:
+    """Test MQTT publishing with multi-zone state data."""
+
+    def test_publishes_per_zone_topics(self):
+        """When state has zones, publish per-zone temperature/heat/target."""
+        client = MQTTClient.__new__(MQTTClient)
+        client.prefix = "kiln"
+        client.publish_interval = 0
+        client.connected = True
+        client._last_publish = 0
+        client._last_values = {}
+        client.oven = None
+
+        published = {}
+        class MockMQTT:
+            def publish(self, topic, payload, qos=0, retain=False):
+                published[topic] = (str(payload), retain)
+        client.client = MockMQTT()
+
+        state = {
+            "state": "RUNNING",
+            "temperature": 2050,
+            "target": 2100,
+            "heat": 0.75,
+            "zones": [
+                {"index": 0, "name": "Top", "temperature": 2060, "target": 2100, "heat": 0.7},
+                {"index": 1, "name": "Bottom", "temperature": 2040, "target": 2100, "heat": 0.8},
+            ],
+            "zone_spread": 20,
+            "zone_max_deviation": 60,
+        }
+        client.publish_state(state)
+
+        assert "kiln/zone/0/temperature" in published
+        assert "kiln/zone/1/temperature" in published
+        assert "kiln/zone/0/heat" in published
+        assert "kiln/zone_spread" in published
+        assert published["kiln/zone/0/temperature"][1] == True  # retained
+
+    def test_no_zone_topics_for_single_zone(self):
+        """When state has no zones key, no zone topics are published."""
+        client = MQTTClient.__new__(MQTTClient)
+        client.prefix = "kiln"
+        client.publish_interval = 0
+        client.connected = True
+        client._last_publish = 0
+        client._last_values = {}
+        client.oven = None
+
+        published = {}
+        class MockMQTT:
+            def publish(self, topic, payload, qos=0, retain=False):
+                published[topic] = payload
+        client.client = MockMQTT()
+
+        state = {"state": "IDLE", "temperature": 65, "target": 0, "heat": 0}
+        client.publish_state(state)
+
+        assert not any("zone/" in k for k in published)
