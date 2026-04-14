@@ -178,8 +178,6 @@ class RealBoard(Board):
             output = Output(zc["gpio_heat"], zc.get("gpio_heat_invert", False))
             zone = Zone(i, zc, sensor, output)
             self.zones.append(zone)
-        # Backward compat alias — removed in Task 7
-        self.temp_sensor = self.zones[0].temp_sensor
         Board.__init__(self)
 
     def load_libs(self):
@@ -217,8 +215,6 @@ class SimulatedBoard(Board):
             output = SimulatedOutput()
             zone = Zone(i, zc, sensor, output)
             self.zones.append(zone)
-        # Backward compat alias — removed in Task 7
-        self.temp_sensor = self.zones[0].temp_sensor
         Board.__init__(self)
 
 class TempSensor(threading.Thread):
@@ -607,7 +603,9 @@ class Oven(threading.Thread):
         if allow_seek:
             if self.state == 'IDLE':
                 if config.seek_start:
-                    temp = self.board.temp_sensor.temperature()  # Defined in a subclass
+                    for zone in self.zones:
+                        zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                    temp = self.get_control_temperature()
                     runtime += self.get_start_from_temperature(profile, temp)
 
         self.reset()
@@ -624,7 +622,9 @@ class Oven(threading.Thread):
         # Initialize segment-based control state (v2 profile format)
         if getattr(config, 'use_rate_based_control', False) and hasattr(profile, 'segments'):
             try:
-                current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                for zone in self.zones:
+                    zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                current_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 current_temp = profile.start_temp
 
@@ -666,8 +666,9 @@ class Oven(threading.Thread):
         '''shift the whole schedule forward in time by one time_step
         to wait for the kiln to catch up'''
         if config.kiln_must_catch_up == True:
-            temp = self.board.temp_sensor.temperature() + \
-                config.thermocouple_offset
+            for zone in self.zones:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            temp = self.get_control_temperature()
             # kiln too cold, wait for it to heat up
             if self.target - temp > config.pid_control_window:
                 log.info("kiln must catch up, too cold, shifting schedule")
@@ -709,8 +710,10 @@ class Oven(threading.Thread):
         """
         if not hasattr(self.profile, 'segments') or not self.profile.segments:
             return
-        
-        temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+
+        for zone in self.zones:
+            zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+        temp = self.get_control_temperature()
         segment = self.profile.segments[self.current_segment_index]
         tolerance = getattr(config, 'segment_complete_tolerance', 5)
         
@@ -772,9 +775,9 @@ class Oven(threading.Thread):
         else:
             self.segment_phase = 'ramp'
             self.segment_start_time = datetime.datetime.now()
-            self.segment_start_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            self.segment_start_temp = self.get_control_temperature()
             next_seg = self.profile.segments[self.current_segment_index]
-            log.info("Starting segment %d: rate=%s, target=%.1f" % 
+            log.info("Starting segment %d: rate=%s, target=%.1f" %
                      (self.current_segment_index, next_seg.rate, next_seg.target))
     
     def calculate_rate_based_target(self):
@@ -815,10 +818,10 @@ class Oven(threading.Thread):
         
         # Get current actual temperature
         try:
-            actual_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            actual_temp = self.get_control_temperature()
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
-        
+
         # Calculate elapsed time since segment start
         if self.segment_start_time:
             elapsed_seconds = (datetime.datetime.now() - self.segment_start_time).total_seconds()
@@ -912,8 +915,8 @@ class Oven(threading.Thread):
             return 0
         
         remaining = 0
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-        
+        current_temp = self.get_control_temperature()
+
         # Time remaining in current segment
         if self.current_segment_index < len(self.profile.segments):
             segment = self.profile.segments[self.current_segment_index]
@@ -1017,7 +1020,11 @@ class Oven(threading.Thread):
     def reset_if_emergency(self):
         '''reset if the temperature is way TOO HOT, or other critical errors detected'''
         try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            # Check the hottest zone — any zone overheating is an emergency
+            zone_temps = []
+            for zone in self.zones:
+                zone_temps.append(zone.temp_sensor.temperature() + zone.thermocouple_offset)
+            temp = max(zone_temps)
         except (AttributeError, TypeError):
             # Can't verify temperature safety without a reading
             return
@@ -1029,8 +1036,8 @@ class Oven(threading.Thread):
                     "Temperature too high: %.1f >= %.1f" % (temp, config.emergency_shutoff_temp),
                     status="emergency_stop")
                 return
-        
-        if self.board.temp_sensor.status.over_error_limit():
+
+        if any(z.temp_sensor.status.over_error_limit() for z in self.zones):
             log.info("emergency!!! too many errors in a short period")
             if config.ignore_tc_too_many_errors == False:
                 self._emergency_shutdown(
@@ -1139,7 +1146,7 @@ class Oven(threading.Thread):
     def track_divergence(self):
         """Track temperature divergence (actual vs target) for firing log analysis"""
         try:
-            temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            temp = self.get_control_temperature()
             divergence = abs(self.target - temp)
             self.divergence_samples.append(divergence)
         except (AttributeError, TypeError):
@@ -1299,9 +1306,9 @@ class Oven(threading.Thread):
         """Update cooling estimate based on recent temperature readings"""
         try:
             # Get current temperature
-            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            current_temp = self.get_control_temperature()
             current_time = time.time()
-            
+
             # Add current temperature to tracking list
             self.cooling_temps.append((current_time, current_temp))
             
@@ -1532,7 +1539,7 @@ class Oven(threading.Thread):
             # Get final temperature
             final_temp = 0
             try:
-                final_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                final_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 pass
             
@@ -1614,7 +1621,7 @@ class Oven(threading.Thread):
 
             # Get current temperature
             try:
-                resume_data['temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                resume_data['temperature'] = self.get_control_temperature()
             except (AttributeError, TypeError):
                 pass
 
@@ -1703,7 +1710,7 @@ class Oven(threading.Thread):
 
             # Get current kiln temperature for the frontend display
             try:
-                data['current_temperature'] = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                data['current_temperature'] = self.get_control_temperature()
             except (AttributeError, TypeError):
                 data['current_temperature'] = None
 
@@ -1831,7 +1838,9 @@ class Oven(threading.Thread):
 
         # Get current temperature
         try:
-            current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            for zone in self.zones:
+                zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+            current_temp = self.get_control_temperature()
         except (AttributeError, TypeError):
             current_temp = resume_data.get('temperature', 0)
 
@@ -1969,7 +1978,9 @@ class Oven(threading.Thread):
 
             # Get current temperature for segment start temp
             try:
-                self.segment_start_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                for zone in self.zones:
+                    zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+                self.segment_start_temp = self.get_control_temperature()
             except (AttributeError, TypeError):
                 self.segment_start_temp = profile.start_temp
 
@@ -2008,11 +2019,11 @@ class Oven(threading.Thread):
                 else:
                     # Check if we should activate cooling mode
                     try:
-                        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+                        current_temp = self.get_control_temperature()
                         target_temp = config.cooling_target_temp
                         if config.temp_scale.lower() == "c":
                             target_temp = (target_temp - 32) * 5 / 9
-                        
+
                         # Activate cooling mode if above target temp
                         if current_temp > target_temp:
                             if not self.cooling_mode:
@@ -2190,10 +2201,10 @@ class SimulatedOven(Oven):
         
         # Get current actual temperature
         try:
-            actual_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+            actual_temp = self.get_control_temperature()
         except (AttributeError, TypeError):
             actual_temp = self.segment_start_temp if self.segment_start_temp else 0
-        
+
         # Calculate elapsed time since segment start (with speedup for simulation)
         if self.segment_start_time:
             elapsed_seconds = (datetime.datetime.now() - self.segment_start_time).total_seconds() * self.speedup_factor
@@ -2234,8 +2245,10 @@ class SimulatedOven(Oven):
         """
         if not hasattr(self.profile, 'segments') or not self.profile.segments:
             return
-        
-        temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+
+        for zone in self.zones:
+            zone.temperature = zone.temp_sensor.temperature() + zone.thermocouple_offset
+        temp = self.get_control_temperature()
         segment = self.profile.segments[self.current_segment_index]
         tolerance = getattr(config, 'segment_complete_tolerance', 5)
         
@@ -2289,18 +2302,17 @@ class SimulatedOven(Oven):
         self.p_env = (self.t - self.t_env) / self.R_o_nocool
         self.t -= self.p_env * self.time_step / self.c_oven
         self.temperature = self.t
-        self.board.temp_sensor.simulated_temperature = self.t
+        for zone in self.zones:
+            zone.temp_sensor.simulated_temperature = self.t
 
     def heat_then_cool(self):
         now_simulator = self.start_time + datetime.timedelta(milliseconds = self.runtime * 1000)
-        pid = self.pid.compute(self.target,
-                               self.board.temp_sensor.temperature() +
-                               config.thermocouple_offset, now_simulator)
+        current_temp = self.get_control_temperature()
+        pid = self.pid.compute(self.target, current_temp, now_simulator)
 
         # During cooling segments: only heat if kiln is cooling too fast (temp below target)
         # If kiln is at or above target, don't heat - let it cool naturally
         cooling_override = False
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
         target_rate = getattr(self, 'target_heat_rate', 0)
         is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
@@ -2375,14 +2387,12 @@ class RealOven(Oven):
         self.output.cool(0)
 
     def heat_then_cool(self):
-        pid = self.pid.compute(self.target,
-                               self.board.temp_sensor.temperature() +
-                               config.thermocouple_offset, datetime.datetime.now())
+        current_temp = self.get_control_temperature()
+        pid = self.pid.compute(self.target, current_temp, datetime.datetime.now())
 
         # During cooling segments: only heat if kiln is cooling too fast (temp below target)
         # If kiln is at or above target, don't heat - let it cool naturally
         cooling_override = False
-        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
         target_rate = getattr(self, 'target_heat_rate', 0)
         is_cooling_segment = (isinstance(target_rate, (int, float)) and target_rate < 0)
         is_natural_cool = (target_rate == "cool")
