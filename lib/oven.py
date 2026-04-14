@@ -131,15 +131,15 @@ class SimulatedOutput:
 class Output(object):
     '''This represents a GPIO output that controls a solid
     state relay to turn the kiln elements on and off.
-    inputs
-        config.gpio_heat
-        config.gpio_heat_invert
+    args
+        gpio_pin: the board pin to drive (e.g. config.gpio_heat)
+        invert: if True, logic is inverted (e.g. config.gpio_heat_invert)
     '''
-    def __init__(self):
+    def __init__(self, gpio_pin, invert=False):
         self.active = False
-        self.heater = digitalio.DigitalInOut(config.gpio_heat) 
-        self.heater.direction = digitalio.Direction.OUTPUT 
-        self.off = config.gpio_heat_invert
+        self.heater = digitalio.DigitalInOut(gpio_pin)
+        self.heater.direction = digitalio.Direction.OUTPUT
+        self.off = invert
         self.on = not self.off
 
     def heat(self,sleepfor):
@@ -2266,7 +2266,7 @@ class RealOven(Oven):
 
     def __init__(self):
         self.board = RealBoard()
-        self.output = Output()
+        self.output = Output(config.gpio_heat, config.gpio_heat_invert)
         self.reset()
 
         # call parent init
