@@ -462,7 +462,8 @@ class Oven(threading.Thread):
         self.daemon = True
         self.temperature = 0
         self.time_step = config.sensor_time_wait
-        self.zones = []  # populated by subclass after board init
+        if not hasattr(self, 'zones'):
+            self.zones = []  # populated by subclass before super().__init__
         self.reset()
 
     def reset(self):
@@ -570,6 +571,9 @@ class Oven(threading.Thread):
 
     def get_control_temperature(self):
         """Return the temperature that drives profile progression, per strategy."""
+        if not self.zones:
+            return 0  # zones not yet initialized
+
         valid_temps = [z.temperature for z in self.zones
                        if z.critical and z.temperature is not None]
 
