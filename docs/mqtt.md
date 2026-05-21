@@ -104,6 +104,7 @@ These persist on the broker so new subscribers get current state immediately.
 | `kiln/profile` | Current profile name | Yes |
 | `kiln/emergency` | Emergency message (empty if none) | Yes |
 | `kiln/segment` | JSON: `{"index":2,"phase":"ramp","total":5}` | Yes |
+| `kiln/firing_status` | `"completed"`, `"aborted"`, `"emergency_stop"`, `"in_progress"` | Yes |
 
 ### Per-Zone Topics (Multi-Zone Only)
 
@@ -145,8 +146,41 @@ To reduce broker traffic, these topics only publish when their value changes:
 - `kiln/profile`
 - `kiln/emergency`
 - `kiln/segment`
+- `kiln/firing_status`
 
 Numeric topics (temperature, heat, rate) publish on every interval since they change continuously during a firing. This optimization reduces traffic by ~70% during stable hold phases.
+
+### Firing-Complete Notifications
+
+`kiln/firing_status` is a retained, change-only topic that records the outcome of the most recent firing:
+
+| Value | Meaning |
+|-------|---------|
+| `"in_progress"` | A firing is currently active (set when the profile starts or resumes) |
+| `"completed"` | Profile ran to the end normally |
+| `"aborted"` | Operator or MQTT `stop` command terminated the firing early |
+| `"emergency_stop"` | The controller hit an unrecoverable error and shut down |
+| `"runaway"` | Temperature-runaway protection triggered |
+
+The topic is not published at all until the first firing begins (when `last_firing_status` is `None`), so a fresh broker stays clean.
+
+**Home Assistant automation example — notify when a firing finishes:**
+
+```yaml
+automation:
+  - alias: "Notify on kiln firing complete"
+    trigger:
+      platform: mqtt
+      topic: kiln/firing_status
+    condition:
+      condition: template
+      value_template: "{{ trigger.payload in ['completed', 'aborted', 'emergency_stop', 'runaway'] }}"
+    action:
+      service: notify.mobile_app
+      data:
+        title: "Kiln firing ended"
+        message: "Firing status: {{ trigger.payload }}"
+```
 
 ## Integration Examples
 

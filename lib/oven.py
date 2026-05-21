@@ -465,6 +465,10 @@ class Oven(threading.Thread):
         if not hasattr(self, 'zones'):
             self.zones = []  # populated by subclass before super().__init__
         self.reset()
+        # Outcome of the most recent firing — survives reset() so consumers
+        # can distinguish completed / aborted / emergency_stop on RUNNING→IDLE.
+        # None until the first firing finishes; "in_progress" while running.
+        self.last_firing_status = None
 
     def reset(self):
         self.cost = 0
@@ -623,7 +627,8 @@ class Oven(threading.Thread):
         self.profile = profile
         self.totaltime = profile.get_duration()
         self.state = "RUNNING"
-        
+        self.last_firing_status = "in_progress"
+
         # Initialize segment-based control state (v2 profile format)
         if getattr(config, 'use_rate_based_control', False) and hasattr(profile, 'segments'):
             try:
@@ -660,6 +665,9 @@ class Oven(threading.Thread):
         # Save firing log if we were running
         if self.profile:
             self.save_firing_log(status="aborted")
+        # Mark outcome before reset() — reset() does not touch last_firing_status
+        # so the value persists into IDLE for consumers to read.
+        self.last_firing_status = "aborted"
         self.reset()
         # Clear automatic restart state so server restart won't auto-resume an intentional abort
         self.clear_automatic_restart_state()
@@ -762,6 +770,7 @@ class Oven(threading.Thread):
             log.info("All segments complete")
             # Transition FIRST to prevent re-entry and duplicate logs
             self.start_cooling()
+            self.last_firing_status = "completed"
             self.state = "IDLE"
             # Run is done - delete state.json so auto-restart won't re-launch
             # a completed firing (same as reset_if_schedule_ended_v2)
@@ -978,6 +987,7 @@ class Oven(threading.Thread):
                 log.info("total cost = %s%.2f" % (config.currency_type, self.cost))
                 # Transition FIRST to prevent re-entry and duplicate logs
                 self.start_cooling()
+                self.last_firing_status = "completed"
                 self.state = "IDLE"
                 # Run is done - delete state.json so auto-restart won't re-launch
                 # a completed firing. (save_automatic_restart_state() is throttled
@@ -1014,7 +1024,10 @@ class Oven(threading.Thread):
         
         # Set emergency reason BEFORE reset so get_state() can report it
         self.emergency_reason = reason
-        
+        # Record firing outcome before reset() so consumers can see the cause
+        # on the resulting RUNNING→IDLE transition.
+        self.last_firing_status = status
+
         # CRITICAL: These must always execute
         self.reset()
         # Bypass the throttled save_automatic_restart_state() and write
@@ -1133,6 +1146,7 @@ class Oven(threading.Thread):
             log.info("total cost = %s%.2f" % (config.currency_type,self.cost))
             # Transition FIRST to prevent re-entry and duplicate logs
             self.start_cooling()
+            self.last_firing_status = "completed"
             self.state = "IDLE"
             # Run is done - delete state.json so auto-restart won't re-launch
             # a completed firing. (save_automatic_restart_state() is throttled
@@ -1422,6 +1436,7 @@ class Oven(threading.Thread):
             'cooling_estimate': self.cooling_estimate if self.cooling_mode else None,
             'simulate': config.simulate,
             'emergency': self.emergency_reason,
+            'last_firing_status': self.last_firing_status,
         }
 
         # Add zone data when multi-zone
@@ -1915,6 +1930,7 @@ class Oven(threading.Thread):
 
             self.cost = resume_data.get('cost', 0)
             self.state = "RUNNING"
+            self.last_firing_status = "in_progress"
 
             log.info("Resume: starting segment %d (%s phase) at %.1f deg" %
                      (resume_segment, resume_phase, current_temp))
@@ -2031,6 +2047,7 @@ class Oven(threading.Thread):
 
             self.cost = d.get("cost", 0)
             self.state = "RUNNING"
+            self.last_firing_status = "in_progress"
 
             log.info("Automatic restart: resuming segment %d (%s phase)" %
                      (self.current_segment_index, self.segment_phase))
@@ -2443,6 +2460,13 @@ class RealOven(Oven):
         super().reset()
         for zone in self.zones:
             zone.output.cool(0)
+
+    def get_loop_sleep_time(self):
+        # heat_then_cool() already paces the loop for time_step seconds via
+        # Output.heat()/cool() blocking sleeps. The base-class sleep is for
+        # SimulatedOven, which does no internal sleeping. Adding it here too
+        # halves the effective relay duty cycle (heat=1.0 became ~50% on).
+        return 0
 
     def heat_then_cool(self):
         now = datetime.datetime.now()

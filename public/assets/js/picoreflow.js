@@ -629,7 +629,12 @@ function updateProfileTable_v2() {
         html += '<td><input type="text" class="form-input form-input-sm seg-target" data-idx="' + i + '" value="' + seg.target + '" /></td>';
         html += '<td><input type="text" class="form-input form-input-sm seg-hold" data-idx="' + i + '" value="' + (seg.hold || 0) + '" /></td>';
         html += '<td class="text-muted">' + time_str + '</td>';
-        html += '<td><button class="btn-delete-segment del-segment" data-idx="' + i + '">×</button></td>';
+        html += '<td class="seg-actions">';
+        html += '<button class="btn-seg-action move-up" data-idx="' + i + '" title="Move up"' + (i === 0 ? ' disabled' : '') + '>▲</button>';
+        html += '<button class="btn-seg-action move-down" data-idx="' + i + '" title="Move down"' + (i === profile_segments.length - 1 ? ' disabled' : '') + '>▼</button>';
+        html += '<button class="btn-seg-action dup-segment" data-idx="' + i + '" title="Duplicate">⎘</button>';
+        html += '<button class="btn-delete-segment del-segment" data-idx="' + i + '" title="Delete">×</button>';
+        html += '</td>';
         html += '</tr>';
 
         current_temp = seg.target;
@@ -675,6 +680,33 @@ function bindSegmentEvents() {
     $('.del-segment').click(function () {
         var idx = $(this).data('idx');
         profile_segments.splice(idx, 1);
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('.dup-segment').click(function () {
+        var idx = $(this).data('idx');
+        var src = profile_segments[idx];
+        var copy = { rate: src.rate, target: src.target, hold: src.hold };
+        profile_segments.splice(idx + 1, 0, copy);
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('.move-up').click(function () {
+        var idx = $(this).data('idx');
+        if (idx <= 0) return;
+        var seg = profile_segments.splice(idx, 1)[0];
+        profile_segments.splice(idx - 1, 0, seg);
+        updateGraphFromSegments();
+        updateProfileTable_v2();
+    });
+
+    $('.move-down').click(function () {
+        var idx = $(this).data('idx');
+        if (idx >= profile_segments.length - 1) return;
+        var seg = profile_segments.splice(idx, 1)[0];
+        profile_segments.splice(idx + 1, 0, seg);
         updateGraphFromSegments();
         updateProfileTable_v2();
     });
@@ -1913,7 +1945,13 @@ $(document).ready(function () {
                 $('#heat_rate_actual').html(actualRate);
 
                 if (typeof x.current_segment !== 'undefined' && typeof x.progress !== 'undefined') {
-                    $('#heat_rate_set').html(formatRateDisplay(x.target_heat_rate));
+                    // During hold phase, the segment's nominal rate is misleading —
+                    // the kiln is parked at target, not climbing. Show "HOLD" instead.
+                    if (x.segment_phase === 'hold') {
+                        $('#heat_rate_set').html('HOLD');
+                    } else {
+                        $('#heat_rate_set').html(formatRateDisplay(x.target_heat_rate));
+                    }
                     var elapsed = x.actual_elapsed_time || 0;
                     $('#elapsed_time').html(formatSecondsToHHMMSS(elapsed));
                     var eta = formatSecondsToHHMMSS(x.eta_seconds || 0);

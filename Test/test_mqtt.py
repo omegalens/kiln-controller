@@ -299,3 +299,70 @@ class TestMultiZonePublish:
         client.publish_state(state)
 
         assert not any("zone/" in k for k in published)
+
+
+class TestFiringStatusTopic:
+    """The firing_status topic lets MQTT subscribers distinguish completed /
+    aborted / emergency_stop runs after the kiln transitions to IDLE.
+
+    Like other change-only topics (state, profile, emergency), it publishes
+    only when the value changes — so subscribers see a single retained value
+    that sticks across reconnects until the next firing starts.
+    """
+
+    def test_firing_status_published_when_set(self, mqtt_client):
+        mqtt_client._last_publish = 0
+        state = {
+            "temperature": 70,
+            "state": "IDLE",
+            "last_firing_status": "completed",
+        }
+        mqtt_client.publish_state(state)
+
+        calls = [
+            c for c in mqtt_client.client.publish.call_args_list
+            if c[0][0] == "kiln/firing_status"
+        ]
+        assert len(calls) == 1
+        assert calls[0][0][1] == "completed"
+        assert calls[0][1].get("retain", calls[0][0][3] if len(calls[0][0]) > 3 else False) is True
+
+    def test_firing_status_not_republished_when_unchanged(self, mqtt_client):
+        state = {"temperature": 70, "state": "IDLE", "last_firing_status": "completed"}
+
+        mqtt_client._last_publish = 0
+        mqtt_client.publish_state(state)
+        mqtt_client._last_publish = 0
+        mqtt_client.publish_state(state)
+
+        calls = [
+            c for c in mqtt_client.client.publish.call_args_list
+            if c[0][0] == "kiln/firing_status"
+        ]
+        assert len(calls) == 1
+
+    def test_firing_status_republished_when_changed(self, mqtt_client):
+        mqtt_client._last_publish = 0
+        mqtt_client.publish_state({"state": "RUNNING", "last_firing_status": "in_progress"})
+        mqtt_client._last_publish = 0
+        mqtt_client.publish_state({"state": "IDLE", "last_firing_status": "completed"})
+
+        calls = [
+            c for c in mqtt_client.client.publish.call_args_list
+            if c[0][0] == "kiln/firing_status"
+        ]
+        assert len(calls) == 2
+        assert calls[0][0][1] == "in_progress"
+        assert calls[1][0][1] == "completed"
+
+    def test_firing_status_omitted_when_none(self, mqtt_client):
+        """Before any firing has happened, last_firing_status is None.
+        Don't publish an empty string in that case — leave the topic clean."""
+        mqtt_client._last_publish = 0
+        mqtt_client.publish_state({"state": "IDLE", "last_firing_status": None})
+
+        calls = [
+            c for c in mqtt_client.client.publish.call_args_list
+            if c[0][0] == "kiln/firing_status"
+        ]
+        assert len(calls) == 0
