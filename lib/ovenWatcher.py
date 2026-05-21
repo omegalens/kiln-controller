@@ -59,6 +59,14 @@ class OvenWatcher(threading.Thread):
         # back through earlier (lower) temperature targets.
         actual_temp = first_state.get('temperature', profile.start_temp)
         from_segment = getattr(self.oven, 'current_segment_index', 0)
+        # Defense: if the controller's segment index didn't advance past
+        # already-reached targets (e.g., legacy time-based control, or
+        # seek_start disabled), to_legacy_format would otherwise draw a
+        # downward ramp through completed segment targets — the visible
+        # "dip" bug. Take the max so resume-from-cooling still wins.
+        if hasattr(profile, 'find_seek_segment') and getattr(profile, 'segments', None):
+            seek_idx, _ = profile.find_seek_segment(actual_temp)
+            from_segment = max(from_segment, seek_idx)
         if hasattr(profile, 'segments') and profile.segments:
             self.adjusted_profile_data = profile.to_legacy_format(start_temp=actual_temp, from_segment=from_segment)
         elif profile.data and len(profile.data) > 0:
