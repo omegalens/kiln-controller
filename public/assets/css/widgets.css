@@ -331,6 +331,33 @@
   color: white;
 }
 
+.segment-table .seg-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.segment-table .btn-seg-action {
+  background: transparent;
+  border: 1px solid var(--border-widget);
+  color: var(--text-primary);
+  border-radius: var(--btn-radius-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  cursor: pointer;
+  font-size: 0.9em;
+  line-height: 1;
+  transition: all var(--transition-fast);
+}
+
+.segment-table .btn-seg-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.segment-table .btn-seg-action:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .edit-actions {
   display: flex;
   gap: var(--spacing-sm);
