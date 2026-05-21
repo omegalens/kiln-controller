@@ -2461,6 +2461,13 @@ class RealOven(Oven):
         for zone in self.zones:
             zone.output.cool(0)
 
+    def get_loop_sleep_time(self):
+        # heat_then_cool() already paces the loop for time_step seconds via
+        # Output.heat()/cool() blocking sleeps. The base-class sleep is for
+        # SimulatedOven, which does no internal sleeping. Adding it here too
+        # halves the effective relay duty cycle (heat=1.0 became ~50% on).
+        return 0
+
     def heat_then_cool(self):
         now = datetime.datetime.now()
         n = len(self.zones)
