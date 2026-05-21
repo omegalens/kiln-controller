@@ -134,6 +134,13 @@ class MQTTClient:
             "profile": state_dict.get("profile"),
             "emergency": state_dict.get("emergency", ""),
         }
+        # firing_status: outcome of the most recent firing
+        # (completed / aborted / emergency_stop / in_progress / runaway).
+        # Only publish when a value is actually set — None means no firing
+        # has happened yet and we shouldn't muddy the topic with empties.
+        firing_status = state_dict.get("last_firing_status")
+        if firing_status is not None:
+            change_only["firing_status"] = firing_status
 
         # Build segment info if available
         segment_info = {}
