@@ -1913,7 +1913,13 @@ $(document).ready(function () {
                 $('#heat_rate_actual').html(actualRate);
 
                 if (typeof x.current_segment !== 'undefined' && typeof x.progress !== 'undefined') {
-                    $('#heat_rate_set').html(formatRateDisplay(x.target_heat_rate));
+                    // During hold phase, the segment's nominal rate is misleading —
+                    // the kiln is parked at target, not climbing. Show "HOLD" instead.
+                    if (x.segment_phase === 'hold') {
+                        $('#heat_rate_set').html('HOLD');
+                    } else {
+                        $('#heat_rate_set').html(formatRateDisplay(x.target_heat_rate));
+                    }
                     var elapsed = x.actual_elapsed_time || 0;
                     $('#elapsed_time').html(formatSecondsToHHMMSS(elapsed));
                     var eta = formatSecondsToHHMMSS(x.eta_seconds || 0);
