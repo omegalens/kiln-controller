@@ -587,6 +587,20 @@ function processBacklog(backlogData) {
     graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
 }
 
+// 6-dot grip icon for the drag handle (2 columns x 3 rows)
+var SEG_GRIP_SVG = '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
+    '<circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/>' +
+    '<circle cx="2" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/>' +
+    '<circle cx="2" cy="14" r="1.5"/><circle cx="8" cy="14" r="1.5"/></svg>';
+
+// A thin "+" insert zone that inserts a new segment at array position `pos`.
+function insertZoneHtml(pos) {
+    return '<div class="insert-zone" data-pos="' + pos + '">' +
+        '<button type="button" class="insert-btn" data-pos="' + pos + '" ' +
+        'title="Insert segment here" aria-label="Insert segment here">+</button>' +
+        '</div>';
+}
+
 function updateProfileTable_v2() {
     var html = '<h3 class="text-secondary mt-md">Firing Segments</h3>';
     html += '<div class="form-group">';
@@ -595,10 +609,15 @@ function updateProfileTable_v2() {
     html += ' °' + temp_scale_display;
     html += '</div>';
 
-    html += '<div class="table-responsive"><table class="segment-table">';
-    html += '<tr><th>#</th><th>Rate (°' + temp_scale_display + '/hr)</th>';
-    html += '<th>Target (°' + temp_scale_display + ')</th>';
-    html += '<th>Hold (min)</th><th>Est.</th><th></th></tr>';
+    html += '<div class="segment-editor">';
+    html += '<div class="seg-header">';
+    html += '<span></span><span>#</span>';
+    html += '<span>Rate (°' + temp_scale_display + '/hr)</span>';
+    html += '<span>Target (°' + temp_scale_display + ')</span>';
+    html += '<span>Hold (min)</span><span>Est.</span><span></span>';
+    html += '</div>';
+
+    html += insertZoneHtml(0);
 
     var cumulative_time = 0;
     var current_temp = profile_start_temp;
@@ -623,31 +642,134 @@ function updateProfileTable_v2() {
 
         var time_str = formatMinutesToHHMM(cumulative_time);
 
-        html += '<tr>';
-        html += '<td>' + (i + 1) + '</td>';
-        html += '<td><input type="text" class="form-input form-input-sm seg-rate" data-idx="' + i + '" value="' + seg.rate + '" /></td>';
-        html += '<td><input type="text" class="form-input form-input-sm seg-target" data-idx="' + i + '" value="' + seg.target + '" /></td>';
-        html += '<td><input type="text" class="form-input form-input-sm seg-hold" data-idx="' + i + '" value="' + (seg.hold || 0) + '" /></td>';
-        html += '<td class="text-muted">' + time_str + '</td>';
-        html += '<td class="seg-actions">';
-        html += '<button class="btn-seg-action move-up" data-idx="' + i + '" title="Move up"' + (i === 0 ? ' disabled' : '') + '>▲</button>';
-        html += '<button class="btn-seg-action move-down" data-idx="' + i + '" title="Move down"' + (i === profile_segments.length - 1 ? ' disabled' : '') + '>▼</button>';
-        html += '<button class="btn-seg-action dup-segment" data-idx="' + i + '" title="Duplicate">⎘</button>';
-        html += '<button class="btn-delete-segment del-segment" data-idx="' + i + '" title="Delete">×</button>';
-        html += '</td>';
-        html += '</tr>';
+        html += '<div class="seg-row" data-idx="' + i + '">';
+        html += '<button type="button" class="seg-grip" data-idx="' + i + '" title="Drag to reorder" aria-label="Drag to reorder">' + SEG_GRIP_SVG + '</button>';
+        html += '<span class="seg-num">' + (i + 1) + '</span>';
+        html += '<input type="text" class="form-input form-input-sm seg-rate" data-idx="' + i + '" value="' + seg.rate + '" />';
+        html += '<input type="text" class="form-input form-input-sm seg-target" data-idx="' + i + '" value="' + seg.target + '" />';
+        html += '<input type="text" class="form-input form-input-sm seg-hold" data-idx="' + i + '" value="' + (seg.hold || 0) + '" />';
+        html += '<span class="seg-est text-muted">' + time_str + '</span>';
+        html += '<button type="button" class="btn-delete-segment del-segment" data-idx="' + i + '" title="Delete">×</button>';
+        html += '</div>';
+
+        html += insertZoneHtml(i + 1);
 
         current_temp = seg.target;
     }
 
-    html += '</table></div>';
-    html += '<div class="flex gap-sm mt-md">';
-    html += '<button class="btn btn-success" id="add_segment">+ Segment</button>';
     html += '</div>';
 
     $('#profile_table').html(html);
     bindSegmentEvents();
     updateGraphFromSegments();
+}
+
+// Insert a new segment at array position `pos`. Between two rows the values
+// interpolate the neighbours; a terminal insert (after the last row, or into an
+// empty profile) uses the classic add defaults.
+function insertSegment(pos) {
+    var prev_temp = pos === 0 ? profile_start_temp : profile_segments[pos - 1].target;
+    var seg;
+
+    if (pos < profile_segments.length) {
+        var next_temp = profile_segments[pos].target;
+        var target = Math.round((prev_temp + next_temp) / 2);
+        var rate = target < prev_temp ? -100 : 100;
+        seg = { rate: rate, target: target, hold: 0 };
+    } else {
+        seg = { rate: 100, target: prev_temp + 100, hold: 0 };
+    }
+
+    profile_segments.splice(pos, 0, seg);
+    updateGraphFromSegments();
+    updateProfileTable_v2();
+}
+
+// Pointer-driven reordering. Drag starts only on the grip handle so the inputs
+// keep normal focus/edit behaviour. The dragged row is lifted into a fixed-
+// position ghost; a dashed placeholder marks the landing slot. The drop index
+// is computed against the frozen midpoints of the other rows' original rects,
+// so no reflow during the drag can make it oscillate.
+function startSegmentDrag(grip, ev) {
+    var editor = grip.closest('.segment-editor');
+    var row = grip.closest('.seg-row');
+    if (!editor || !row) return;
+
+    ev.preventDefault();
+
+    var drag_idx = parseInt(row.getAttribute('data-idx'), 10);
+    var rect = row.getBoundingClientRect();
+    var offset_x = ev.clientX - rect.left;
+    var offset_y = ev.clientY - rect.top;
+
+    var siblings = [];
+    var frozen_mids = [];
+    var all_rows = editor.querySelectorAll('.seg-row');
+    for (var i = 0; i < all_rows.length; i++) {
+        if (all_rows[i] === row) continue;
+        var b = all_rows[i].getBoundingClientRect();
+        siblings.push(all_rows[i]);
+        frozen_mids.push(b.top + b.height / 2);
+    }
+
+    var placeholder = document.createElement('div');
+    placeholder.className = 'drag-placeholder';
+    placeholder.style.height = rect.height + 'px';
+    row.parentNode.insertBefore(placeholder, row);
+
+    editor.classList.add('editor-dragging');
+    row.classList.add('dragging');
+    row.style.width = rect.width + 'px';
+    row.style.position = 'fixed';
+    row.style.left = rect.left + 'px';
+    row.style.top = rect.top + 'px';
+    row.style.margin = '0';
+    row.style.pointerEvents = 'none';
+    row.style.zIndex = '1000';
+
+    var drop_idx = drag_idx;
+
+    try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* older browsers */ }
+
+    function onMove(e) {
+        row.style.left = (e.clientX - offset_x) + 'px';
+        row.style.top = (e.clientY - offset_y) + 'px';
+
+        var new_idx = 0;
+        for (var k = 0; k < frozen_mids.length; k++) {
+            if (e.clientY > frozen_mids[k]) new_idx++;
+        }
+        if (new_idx === drop_idx) return;
+        drop_idx = new_idx;
+
+        if (new_idx >= siblings.length) {
+            editor.appendChild(placeholder);
+        } else {
+            siblings[new_idx].parentNode.insertBefore(placeholder, siblings[new_idx]);
+        }
+    }
+
+    function finish() {
+        grip.removeEventListener('pointermove', onMove);
+        grip.removeEventListener('pointerup', onUp);
+        grip.removeEventListener('pointercancel', onCancel);
+        try { grip.releasePointerCapture(ev.pointerId); } catch (e) { /* no-op */ }
+
+        if (drop_idx !== drag_idx) {
+            var moved = profile_segments.splice(drag_idx, 1)[0];
+            profile_segments.splice(drop_idx, 0, moved);
+            updateGraphFromSegments();
+        }
+        // Re-render rebuilds the rows cleanly, discarding the ghost + placeholder.
+        updateProfileTable_v2();
+    }
+
+    function onUp() { finish(); }
+    function onCancel() { finish(); }
+
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+    grip.addEventListener('pointercancel', onCancel);
 }
 
 function bindSegmentEvents() {
@@ -684,43 +806,12 @@ function bindSegmentEvents() {
         updateProfileTable_v2();
     });
 
-    $('.dup-segment').click(function () {
-        var idx = $(this).data('idx');
-        var src = profile_segments[idx];
-        var copy = { rate: src.rate, target: src.target, hold: src.hold };
-        profile_segments.splice(idx + 1, 0, copy);
-        updateGraphFromSegments();
-        updateProfileTable_v2();
+    $('.insert-btn').on('click', function () {
+        insertSegment($(this).data('pos'));
     });
 
-    $('.move-up').click(function () {
-        var idx = $(this).data('idx');
-        if (idx <= 0) return;
-        var seg = profile_segments.splice(idx, 1)[0];
-        profile_segments.splice(idx - 1, 0, seg);
-        updateGraphFromSegments();
-        updateProfileTable_v2();
-    });
-
-    $('.move-down').click(function () {
-        var idx = $(this).data('idx');
-        if (idx >= profile_segments.length - 1) return;
-        var seg = profile_segments.splice(idx, 1)[0];
-        profile_segments.splice(idx + 1, 0, seg);
-        updateGraphFromSegments();
-        updateProfileTable_v2();
-    });
-
-    $('#add_segment').click(function () {
-        var last_temp = profile_segments.length > 0 ?
-            profile_segments[profile_segments.length - 1].target : profile_start_temp;
-        profile_segments.push({
-            rate: 100,
-            target: last_temp + 100,
-            hold: 0
-        });
-        updateGraphFromSegments();
-        updateProfileTable_v2();
+    $('.seg-grip').on('pointerdown', function (e) {
+        startSegmentDrag(this, e.originalEvent || e);
     });
 }
 
@@ -1176,6 +1267,26 @@ function enterEditMode() {
 
     var profile = profiles[selected_profile];
     loadProfileForEditing(profile);
+
+    updateProfileTable_v2();
+    $('#profile_table').show();
+}
+
+function enterDuplicateMode() {
+    edit_mode = true;
+
+    $('#btn_controls').hide();
+    $('#edit-panel').slideDown();
+
+    graph.profile.points.show = true;
+    graph.profile.draggable = true;
+    graph.plot = $.plot("#graph_container", [graph.profile, graph.live], getOptions());
+
+    // loadProfileForEditing deep-copies segments (no shared refs with the source).
+    var profile = profiles[selected_profile];
+    loadProfileForEditing(profile);
+
+    $('#form_profile_name').val(profile.name + ' (copy)');
 
     updateProfileTable_v2();
     $('#profile_table').show();
@@ -2198,6 +2309,11 @@ $(document).ready(function () {
     // New profile button
     $('#btn_new').on('click', function () {
         enterNewMode();
+    });
+
+    // Duplicate profile button
+    $('#btn_dup').on('click', function () {
+        enterDuplicateMode();
     });
 
     // Edit panel buttons
