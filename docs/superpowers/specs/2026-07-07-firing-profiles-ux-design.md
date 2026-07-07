@@ -123,7 +123,7 @@ original index if the drop index never changed).
 
 ## Out of scope
 
-- Keyboard-accessible reordering (arrows had implicit keyboard support; drag does not — noted as a
-  possible follow-up, not part of this change).
+- Keyboard-accessible reordering — explicitly not wanted (decided 2026-07-07); reordering is
+  drag-only.
 - Undo/redo in the editor.
 - Any change to profile storage format or backend endpoints.
