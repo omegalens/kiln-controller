@@ -685,17 +685,23 @@ function insertSegment(pos) {
     updateProfileTable_v2();
 }
 
+// Guards against a second grip starting a parallel drag while one is active.
+var seg_drag_active = false;
+
 // Pointer-driven reordering. Drag starts only on the grip handle so the inputs
 // keep normal focus/edit behaviour. The dragged row is lifted into a fixed-
 // position ghost; a dashed placeholder marks the landing slot. The drop index
-// is computed against the frozen midpoints of the other rows' original rects,
-// so no reflow during the drag can make it oscillate.
+// is recomputed each move from the other rows' *live* midpoints, so the target
+// stays correct even if the page scrolls mid-drag.
 function startSegmentDrag(grip, ev) {
+    if (seg_drag_active) return;
+
     var editor = grip.closest('.segment-editor');
     var row = grip.closest('.seg-row');
     if (!editor || !row) return;
 
     ev.preventDefault();
+    seg_drag_active = true;
 
     var drag_idx = parseInt(row.getAttribute('data-idx'), 10);
     var rect = row.getBoundingClientRect();
@@ -703,13 +709,9 @@ function startSegmentDrag(grip, ev) {
     var offset_y = ev.clientY - rect.top;
 
     var siblings = [];
-    var frozen_mids = [];
     var all_rows = editor.querySelectorAll('.seg-row');
     for (var i = 0; i < all_rows.length; i++) {
-        if (all_rows[i] === row) continue;
-        var b = all_rows[i].getBoundingClientRect();
-        siblings.push(all_rows[i]);
-        frozen_mids.push(b.top + b.height / 2);
+        if (all_rows[i] !== row) siblings.push(all_rows[i]);
     }
 
     var placeholder = document.createElement('div');
@@ -735,9 +737,12 @@ function startSegmentDrag(grip, ev) {
         row.style.left = (e.clientX - offset_x) + 'px';
         row.style.top = (e.clientY - offset_y) + 'px';
 
+        // Compare the pointer against the siblings' current midpoints (recomputed
+        // live so a mid-drag scroll can't leave the drop target stale).
         var new_idx = 0;
-        for (var k = 0; k < frozen_mids.length; k++) {
-            if (e.clientY > frozen_mids[k]) new_idx++;
+        for (var k = 0; k < siblings.length; k++) {
+            var b = siblings[k].getBoundingClientRect();
+            if (e.clientY > b.top + b.height / 2) new_idx++;
         }
         if (new_idx === drop_idx) return;
         drop_idx = new_idx;
@@ -760,6 +765,7 @@ function startSegmentDrag(grip, ev) {
             profile_segments.splice(drop_idx, 0, moved);
             updateGraphFromSegments();
         }
+        seg_drag_active = false;
         // Re-render rebuilds the rows cleanly, discarding the ghost + placeholder.
         updateProfileTable_v2();
     }

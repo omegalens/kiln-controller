@@ -374,6 +374,18 @@
     height: 28px;
     font-size: 6px;
   }
+
+  /* Drop the Est. column at the narrowest width so the rate/target/hold inputs
+     widen enough to show a full 4-digit signed value (e.g. "-500", "2000"). */
+  .seg-header,
+  .seg-row {
+    grid-template-columns: 20px 16px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 28px;
+  }
+
+  .seg-est,
+  .seg-header span:nth-child(6) {
+    display: none;
+  }
 }
 
 /* ============================================
