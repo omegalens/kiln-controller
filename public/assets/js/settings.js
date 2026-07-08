@@ -253,18 +253,94 @@
     });
   }
 
+  // --- save flow --------------------------------------------------------
+  function saveScope(scope) {
+    var values = dirty[scope];
+    var reset = Object.keys(resets[scope]);
+    var payload = { scope: scope, values: values, reset: reset };
+
+    // Mid-firing ignore_* changes need a typed confirmation (ledger D114).
+    if (snap.oven_state !== 'IDLE') {
+      var needsConfirm = Object.keys(values).some(function (k) {
+        return snap.schema[k].mid_firing_editable;
+      }) || reset.some(function (k) {
+        return snap.schema[k].mid_firing_editable;
+      });
+      if (needsConfirm) {
+        var typed = window.prompt(
+          'You are changing thermocouple error handling WHILE THE KILN IS FIRING.\n' +
+          'Type IGNORE to confirm:');
+        if (typed !== 'IGNORE') {
+          $.bootstrapGrowl('Save cancelled', { type: 'warning' });
+          return;
+        }
+        payload.confirm = true;
+      }
+    }
+
+    post(API, payload).done(function (resp) {
+      var outcomes = resp.outcomes || {};
+      var counts = { 'applied': 0, 'applied-next-firing': 0, 'restart-required': 0 };
+      Object.keys(outcomes).forEach(function (k) { counts[outcomes[k]]++; });
+      if (counts['applied']) {
+        $.bootstrapGrowl(counts['applied'] + ' setting(s) applied', { type: 'success' });
+      }
+      if (counts['applied-next-firing']) {
+        $.bootstrapGrowl(counts['applied-next-firing'] + ' setting(s) saved — take effect at the next firing', { type: 'info' });
+      }
+      if (counts['restart-required']) {
+        $.bootstrapGrowl(counts['restart-required'] + ' setting(s) saved — restart required', { type: 'warning' });
+      }
+      refresh(); // re-renders; banner driven by server-side restart_pending (D115)
+    }).fail(function (xhr) {
+      // Per-key errors: mark rows, keep edits so the user can fix them.
+      var errors = (xhr.responseJSON || {}).errors || {};
+      $('.setting-error').remove();
+      Object.keys(errors).forEach(function (k) {
+        var $row = $('.setting-row[data-key="' + k + '"]');
+        if ($row.length) {
+          $row.append($('<p class="setting-error">').text(errors[k]));
+        } else {
+          $.bootstrapGrowl(k + ': ' + errors[k], { type: 'danger' });
+        }
+      });
+    });
+  }
+
+  // --- restart ------------------------------------------------------------
+  function pollUntilBack(attempt) {
+    if (attempt > 30) {
+      $('#restart-status').text('Server did not come back — check the Pi.');
+      return;
+    }
+    $.getJSON(API).done(function () {
+      window.location.reload();
+    }).fail(function () {
+      setTimeout(function () { pollUntilBack(attempt + 1); }, 2000);
+    });
+  }
+
+  function bindSaveAndRestart() {
+    $('#btn_save_kiln').on('click', function () { saveScope('kiln'); });
+    $('#btn_save_global').on('click', function () { saveScope('global'); });
+    $('#btn_restart').on('click', function () {
+      if (!window.confirm('Restart the kiln controller now? (Only possible while idle.)')) return;
+      post(API + '/restart', {}).done(function () {
+        $('#btn_restart').prop('disabled', true);
+        $('#restart-status').text('Restarting…');
+        setTimeout(function () { pollUntilBack(0); }, 2000);
+      }).fail(function (xhr) {
+        var err = ((xhr.responseJSON || {}).error) || 'restart refused';
+        $.bootstrapGrowl(err, { type: 'danger' });
+      });
+    });
+  }
+
   $(function () {
     bindKilnBar();
+    bindSaveAndRestart();
     refresh();
     // Keep oven-state gating fresh, but never clobber in-progress edits.
     setInterval(function () { if (!hasDirty()) refresh(); }, 10000);
   });
-
-  // Save flow attached in the next task; expose internals for it.
-  window._settingsPanel = {
-    getSnap: function () { return snap; },
-    getDirty: function () { return dirty; },
-    getResets: function () { return resets; },
-    refresh: refresh, post: post, showErrors: showErrors
-  };
 })();
