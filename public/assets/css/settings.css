@@ -54,15 +54,39 @@
 
 .settings-hint { opacity: 0.7; font-size: 0.9em; margin: 4px 0 10px; }
 
-.settings-category { margin: 18px 0 6px; }
+/* Recess the section body so each category card reads as raised against it. */
+#kiln-settings,
+#global-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  margin: var(--spacing-sm) 0 var(--spacing-md);
+  background: var(--bg-widget-inset);
+  border-radius: var(--widget-radius);
+  box-shadow: var(--shadow-inset);
+}
+
+/* Each settings category is its own distinct raised card. */
+.settings-category {
+  background: var(--bg-input);
+  border: 1px solid var(--border-widget);
+  border-radius: var(--widget-radius-sm);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
 .settings-category h3 {
-  font-size: 0.95em;
+  font-size: 0.8em;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.75;
-  margin: 0 0 6px;
+  letter-spacing: 0.09em;
+  color: var(--accent-primary-bright);
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(230, 126, 34, 0.07);
+  border-left: 3px solid var(--accent-primary);
   border-bottom: 1px solid var(--border-widget);
-  padding-bottom: 4px;
 }
 
 .setting-row {
@@ -70,10 +94,12 @@
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
   gap: 4px 16px;
   align-items: center;
-  padding: 8px 0;
+  padding: var(--spacing-md);
 }
 
-.setting-row.setting-dirty { background: rgba(255, 255, 0, 0.04); }
+.setting-row + .setting-row { border-top: 1px solid var(--border-subtle); }
+
+.setting-row.setting-dirty { background: rgba(255, 255, 0, 0.05); }
 
 .setting-label { font-weight: 600; }
 
@@ -89,7 +115,7 @@
 .setting-source.source-global { background: var(--led-cool-glow); }
 .setting-source.source-pending { background: var(--led-hazard); }
 
-.setting-help { font-size: 0.8em; opacity: 0.65; margin: 2px 0 0; }
+.setting-help { font-size: 0.8em; opacity: 0.65; margin: 4px 0 0; line-height: 1.35; }
 
 .setting-control {
   display: flex;
@@ -105,6 +131,28 @@
 .setting-control select {
   width: 120px;
   max-width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-body);
+  border: 1px solid var(--border-widget);
+  border-radius: var(--btn-radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.setting-control input:focus,
+.setting-control select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-primary-glow);
+}
+
+.setting-control input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
 }
 
 .setting-unit { font-size: 0.85em; opacity: 0.7; min-width: 2.5em; }
@@ -128,7 +176,12 @@
 }
 
 @media (max-width: 480px) {
-  .setting-row { grid-template-columns: 1fr; }
-  .setting-control { justify-content: flex-start; }
+  .setting-row {
+    grid-template-columns: 1fr;
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+  .setting-control { justify-content: flex-start; margin-top: var(--spacing-xs); }
   .kiln-bar .btn { flex: 1 1 auto; }
+  #kiln-settings,
+  #global-settings { padding: var(--spacing-sm); }
 }
