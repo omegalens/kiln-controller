@@ -75,6 +75,12 @@ class SettingsManager:
     def _kiln_path(self, name):
         return os.path.join(self.kilns_dir, name + ".json")
 
+    def _require_valid_name(self, name):
+        """Reject names that don't match the creation charset BEFORE any
+        path construction — CRUD inputs arrive raw from the HTTP layer."""
+        if not isinstance(name, str) or not KILN_NAME_RE.match(name):
+            raise SettingsValidationError({"name": "invalid kiln name"})
+
     def _load_kiln_overlay(self, name):
         return self._read_json(self._kiln_path(name))
 
@@ -284,6 +290,7 @@ class SettingsManager:
 
     def rename_kiln(self, old, new):
         with self._lock:
+            self._require_valid_name(old)
             if not os.path.exists(self._kiln_path(old)):
                 raise SettingsValidationError({"name": "kiln '%s' not found" % old})
             if not isinstance(new, str) or not KILN_NAME_RE.match(new):
@@ -300,6 +307,7 @@ class SettingsManager:
 
     def delete_kiln(self, name):
         with self._lock:
+            self._require_valid_name(name)
             if name == self.get_active_kiln():
                 raise SettingsValidationError(
                     {"name": "cannot delete the active kiln settings profile"})
@@ -318,6 +326,8 @@ class SettingsManager:
             raise SettingsValidationError(
                 {"state": "cannot switch kilns while oven is %s" % oven_state})
         with self._lock:
+            if name is not None:
+                self._require_valid_name(name)
             if name is not None and not os.path.exists(self._kiln_path(name)):
                 raise SettingsValidationError({"name": "kiln '%s' not found" % name})
             self._write_json_atomic(self.active_file, {"active": name})

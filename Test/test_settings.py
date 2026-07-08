@@ -270,6 +270,26 @@ class TestKilnCrud:
         with pytest.raises(SettingsValidationError):
             manager.delete_kiln("Nope")
 
+    def test_delete_rejects_traversal_names(self, manager, tmp_path):
+        # kilns/ must exist so a real FileNotFoundError can't masquerade as
+        # the traversal guard rejecting the name.
+        os.makedirs(str(tmp_path / "settings" / "kilns"), exist_ok=True)
+        # would resolve to settings/global.json without validation
+        write_json(str(tmp_path / "settings" / "global.json"), {"kwh_rate": 0.2})
+        for bad in ("../global", "a/b", "..", ".hidden"):
+            with pytest.raises(SettingsValidationError):
+                manager.delete_kiln(bad)
+        assert os.path.exists(str(tmp_path / "settings" / "global.json"))
+
+    def test_rename_rejects_traversal_old_name(self, manager, tmp_path):
+        # kilns/ must exist on disk so "../global.json" genuinely resolves to
+        # settings/global.json — otherwise a missing-directory FileNotFoundError
+        # masquerades as the traversal guard rejecting the name.
+        os.makedirs(str(tmp_path / "settings" / "kilns"), exist_ok=True)
+        write_json(str(tmp_path / "settings" / "global.json"), {"kwh_rate": 0.2})
+        with pytest.raises(SettingsValidationError):
+            manager.rename_kiln("../global", "Fine Name")
+
 
 class TestActivateKiln:
     def test_activate_applies_overlay_and_reverts_missing_keys(self, manager, cfg):
@@ -298,6 +318,15 @@ class TestActivateKiln:
     def test_activate_missing_kiln(self, manager):
         with pytest.raises(SettingsValidationError):
             manager.activate_kiln("Nope")
+
+    def test_activate_rejects_traversal_name(self, manager, tmp_path):
+        # kilns/ must exist on disk so "../global.json" genuinely resolves to
+        # settings/global.json — otherwise a missing-directory FileNotFoundError
+        # masquerades as the traversal guard rejecting the name.
+        os.makedirs(str(tmp_path / "settings" / "kilns"), exist_ok=True)
+        write_json(str(tmp_path / "settings" / "global.json"), {"kwh_rate": 0.2})
+        with pytest.raises(SettingsValidationError):
+            manager.activate_kiln("../global")
 
     def test_activate_reports_restart_required_for_restart_keys(self, manager, cfg):
         # thermocouple_offset is a restart-apply kiln key: switching to a kiln
