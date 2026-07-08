@@ -25,6 +25,14 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, script_dir + '/lib/')
 profile_path = config.kiln_profiles_directory
 
+# Apply settings overlays BEFORE importing/constructing the oven — the oven
+# caches config values (PID gains, sensor timing, thermocouple offset) at
+# construction time, so overlays must already be in place.
+from settings import SettingsManager, SettingsValidationError
+settings_manager = SettingsManager(
+    config, os.path.join(script_dir, "storage", "settings"))
+settings_manager.load_and_apply()
+
 from oven import SimulatedOven, RealOven, Profile
 from ovenWatcher import OvenWatcher
 
@@ -682,7 +690,92 @@ def api_unpin_log(filename):
         return json.dumps({"success": True, "pinned": get_pinned_logs()})
     except Exception as e:
         log.error(f"Error unpinning log {filename}: {e}")
-        return json.dumps({"error": "Failed to unpin log"})    
+        return json.dumps({"error": "Failed to unpin log"})
+
+########################################################################
+# Settings API — see docs/superpowers/specs/2026-07-07-settings-panel-design.md
+
+@app.get('/api/settings')
+def api_get_settings():
+    bottle.response.content_type = 'application/json'
+    return json.dumps(settings_manager.snapshot(oven.state))
+
+@app.post('/api/settings')
+def api_update_settings():
+    payload = bottle.request.json or {}
+    try:
+        outcomes = settings_manager.update_settings(
+            scope=payload.get("scope"),
+            values=payload.get("values") or {},
+            reset=payload.get("reset") or [],
+            oven_state=oven.state,
+            confirm=bool(payload.get("confirm")),
+        )
+        return {"success": True, "outcomes": outcomes}
+    except SettingsValidationError as e:
+        bottle.response.status = 400
+        return {"success": False, "errors": e.errors}
+
+@app.post('/api/settings/kilns')
+def api_create_kiln():
+    payload = bottle.request.json or {}
+    try:
+        name = settings_manager.create_kiln(
+            payload.get("name"), payload.get("duplicate_from"))
+        return {"success": True, "name": name}
+    except SettingsValidationError as e:
+        bottle.response.status = 400
+        return {"success": False, "errors": e.errors}
+
+@app.put('/api/settings/kilns/<name>')
+def api_rename_kiln(name):
+    payload = bottle.request.json or {}
+    try:
+        settings_manager.rename_kiln(name, payload.get("name"))
+        return {"success": True}
+    except SettingsValidationError as e:
+        bottle.response.status = 400
+        return {"success": False, "errors": e.errors}
+
+@app.delete('/api/settings/kilns/<name>')
+def api_delete_kiln(name):
+    try:
+        settings_manager.delete_kiln(name)
+        return {"success": True}
+    except SettingsValidationError as e:
+        bottle.response.status = 400
+        return {"success": False, "errors": e.errors}
+
+@app.post('/api/settings/active_kiln')
+def api_activate_kiln():
+    payload = bottle.request.json or {}
+    try:
+        result = settings_manager.activate_kiln(
+            payload.get("name"), oven_state=oven.state)
+        return {"success": True, "restart_required": result["restart_required"]}
+    except SettingsValidationError as e:
+        bottle.response.status = 400
+        return {"success": False, "errors": e.errors}
+
+@app.post('/api/settings/restart')
+def api_restart():
+    """Exit cleanly so systemd (Restart=always) brings the server back up.
+    os._exit is deliberate: sys.exit inside a gevent handler only kills the
+    greenlet. The oven is IDLE (guarded below), so there is no firing state
+    to lose; state.json is written periodically regardless."""
+    if oven.state != "IDLE":
+        bottle.response.status = 409
+        return {"success": False,
+                "error": "cannot restart while oven is %s" % oven.state}
+    log.warning("Restart requested via /api/settings/restart; exiting for systemd restart")
+
+    def _deferred_restart():
+        if oven.state != "IDLE":
+            log.warning("Restart aborted: oven left IDLE during restart delay (state=%s)" % oven.state)
+            return
+        os._exit(0)
+    gevent.spawn_later(0.5, _deferred_restart)
+    return {"success": True}
 
 def main():
     ip = "0.0.0.0"

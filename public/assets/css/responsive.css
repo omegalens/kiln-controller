@@ -279,10 +279,22 @@
     font-size: var(--text-xl);
   }
 
-  /* Control buttons */
+  /* Control buttons: the narrow insights column can't hold alert + START + gear
+     in a rigid 3-column grid, so reflow to a centered wrapping row. This keeps
+     the settings gear reachable (never clipped) instead of overflowing the
+     widget's hidden overflow. */
   .controls {
-    gap: 0 var(--spacing-xs);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--spacing-xs);
     padding: var(--spacing-sm) var(--spacing-xs);
+  }
+
+  .controls-left,
+  .controls-right {
+    justify-self: auto;
   }
 
   .btn-control {
