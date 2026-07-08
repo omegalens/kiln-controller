@@ -278,6 +278,7 @@ class SettingsManager:
             self._validate_kiln_name(name)
             overlay = {}
             if duplicate_from:
+                self._require_valid_name(duplicate_from)
                 source = self._load_kiln_overlay(duplicate_from)
                 if source is None:
                     raise SettingsValidationError(
@@ -293,8 +294,7 @@ class SettingsManager:
             self._require_valid_name(old)
             if not os.path.exists(self._kiln_path(old)):
                 raise SettingsValidationError({"name": "kiln '%s' not found" % old})
-            if not isinstance(new, str) or not KILN_NAME_RE.match(new):
-                raise SettingsValidationError({"name": "invalid name"})
+            self._require_valid_name(new)
             if old.lower() != new.lower():
                 # Full uniqueness check; skipped for pure case-change renames
                 # of the same kiln.
@@ -328,8 +328,8 @@ class SettingsManager:
         with self._lock:
             if name is not None:
                 self._require_valid_name(name)
-            if name is not None and not os.path.exists(self._kiln_path(name)):
-                raise SettingsValidationError({"name": "kiln '%s' not found" % name})
+                if not os.path.exists(self._kiln_path(name)):
+                    raise SettingsValidationError({"name": "kiln '%s' not found" % name})
             self._write_json_atomic(self.active_file, {"active": name})
             overlay = (self._load_kiln_overlay(name) or {}) if name else {}
             restart_required = False

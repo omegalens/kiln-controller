@@ -253,6 +253,16 @@ class TestKilnCrud:
         with pytest.raises(SettingsValidationError):
             manager.create_kiln("Copy", duplicate_from="Nope")
 
+    def test_duplicate_from_rejects_traversal_name(self, manager, tmp_path):
+        # kilns/ must exist on disk so "../global.json" genuinely resolves to
+        # settings/global.json — otherwise a missing-directory FileNotFoundError
+        # masquerades as the traversal guard rejecting the name.
+        os.makedirs(str(tmp_path / "settings" / "kilns"), exist_ok=True)
+        write_json(str(tmp_path / "settings" / "global.json"), {"kwh_rate": 0.2})
+        with pytest.raises(SettingsValidationError):
+            manager.create_kiln("Fine Name", duplicate_from="../global")
+        assert not os.path.exists(str(tmp_path / "settings" / "kilns" / "Fine Name.json"))
+
     def test_rename_updates_active_pointer(self, manager):
         manager.create_kiln("Old Name")
         manager.activate_kiln("Old Name")
