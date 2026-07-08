@@ -25,6 +25,14 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, script_dir + '/lib/')
 profile_path = config.kiln_profiles_directory
 
+# Apply settings overlays BEFORE importing/constructing the oven — the oven
+# caches config values (PID gains, sensor timing, thermocouple offset) at
+# construction time, so overlays must already be in place.
+from settings import SettingsManager, SettingsValidationError
+settings_manager = SettingsManager(
+    config, os.path.join(script_dir, "storage", "settings"))
+settings_manager.load_and_apply()
+
 from oven import SimulatedOven, RealOven, Profile
 from ovenWatcher import OvenWatcher
 
