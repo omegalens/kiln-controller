@@ -177,6 +177,7 @@
 /* Profile Actions */
 .profile-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-sm);
   padding: var(--spacing-md);
   border-top: 1px solid var(--border-subtle);
@@ -277,36 +278,50 @@
   border-color: var(--accent-primary);
 }
 
-/* Segment Editor Table */
-.segment-table {
-  width: 100%;
-  border-collapse: collapse;
+/* Segment Editor (grid rows) */
+.segment-editor {
   margin: var(--spacing-md) 0;
 }
 
-.segment-table th {
+.seg-header,
+.seg-row {
+  display: grid;
+  grid-template-columns: 34px 30px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 74px 34px;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.seg-header {
   font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-label);
-  text-align: left;
-  padding: var(--spacing-sm);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 var(--spacing-sm) var(--spacing-sm);
 }
 
-.segment-table td {
+.seg-row {
+  background: var(--bg-widget-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--widget-radius-sm);
   padding: var(--spacing-sm);
-  border-bottom: 1px solid var(--border-subtle);
 }
 
-/* Est. column (5th) should not wrap */
-.segment-table td:nth-child(5) {
+.seg-num {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.seg-est {
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 
-.segment-table input {
-  width: 70px;
+.seg-row input {
+  width: 100%;
+  min-width: 0;
   padding: var(--spacing-xs) var(--spacing-sm);
   background: var(--bg-input);
   border: 1px solid var(--border-widget);
@@ -316,46 +331,118 @@
   font-size: var(--text-sm);
 }
 
-.segment-table .btn-delete-segment {
-  padding: var(--spacing-xs) var(--spacing-sm);
+/* Drag handle */
+.seg-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.seg-grip:hover {
+  color: var(--text-secondary);
+}
+
+.seg-grip:active {
+  cursor: grabbing;
+}
+
+.seg-grip svg {
+  display: block;
+  pointer-events: none;
+}
+
+/* Drag ghost + drop placeholder */
+.seg-row.dragging {
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-widget);
+  opacity: 0.95;
+}
+
+.drag-placeholder {
+  border: 2px dashed var(--accent-primary);
+  border-radius: var(--widget-radius-sm);
+  background: var(--accent-primary-glow);
+  box-sizing: border-box;
+}
+
+.editor-dragging .insert-zone {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Delete button */
+.btn-delete-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: transparent;
   border: 1px solid var(--accent-danger);
-  border-radius: var(--btn-radius-sm);
+  border-radius: 50%;
   color: var(--accent-danger);
+  font-size: var(--text-md);
+  line-height: 1;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
-.segment-table .btn-delete-segment:hover {
+.btn-delete-segment:hover {
   background: var(--accent-danger);
   color: white;
 }
 
-.segment-table .seg-actions {
+/* Insert zones */
+.insert-zone {
+  position: relative;
   display: flex;
-  gap: 4px;
   align-items: center;
+  justify-content: center;
+  height: 22px;
 }
 
-.segment-table .btn-seg-action {
-  background: transparent;
+.insert-zone::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.insert-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: var(--bg-widget);
   border: 1px solid var(--border-widget);
-  color: var(--text-primary);
-  border-radius: var(--btn-radius-sm);
-  padding: var(--spacing-xs) var(--spacing-sm);
-  cursor: pointer;
-  font-size: 0.9em;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
   line-height: 1;
+  cursor: pointer;
   transition: all var(--transition-fast);
 }
 
-.segment-table .btn-seg-action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.segment-table .btn-seg-action:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
+.insert-btn:hover,
+.insert-btn:focus {
+  color: white;
+  background: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+  outline: none;
 }
 
 .edit-actions {

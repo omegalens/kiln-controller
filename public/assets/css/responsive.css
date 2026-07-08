@@ -235,6 +235,35 @@
   .confirm-actions {
     flex-direction: column;
   }
+
+  /* Segment editor: tighten fixed columns and input padding so the three
+     value inputs keep a usable width (and never overlap) at phone widths. */
+  .seg-header,
+  .seg-row {
+    grid-template-columns: 22px 16px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 50px 28px;
+    gap: 4px;
+  }
+
+  .segment-editor .seg-row input.form-input {
+    padding: var(--spacing-xs);
+  }
+
+  /* Let the column labels wrap (including inside the unit tokens) instead of
+     clipping in the narrow tracks. */
+  .seg-header {
+    align-items: end;
+  }
+
+  .seg-header span {
+    line-height: 1.1;
+    overflow-wrap: anywhere;
+  }
+
+  .seg-est {
+    font-size: var(--text-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 /* ============================================
@@ -356,6 +385,18 @@
     width: 28px;
     height: 28px;
     font-size: 6px;
+  }
+
+  /* Drop the Est. column at the narrowest width so the rate/target/hold inputs
+     widen enough to show a full 4-digit signed value (e.g. "-500", "2000"). */
+  .seg-header,
+  .seg-row {
+    grid-template-columns: 20px 16px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 28px;
+  }
+
+  .seg-est,
+  .seg-header span:nth-child(6) {
+    display: none;
   }
 }
 
