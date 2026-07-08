@@ -768,7 +768,13 @@ def api_restart():
         return {"success": False,
                 "error": "cannot restart while oven is %s" % oven.state}
     log.warning("Restart requested via /api/settings/restart; exiting for systemd restart")
-    gevent.spawn_later(0.5, os._exit, 0)
+
+    def _deferred_restart():
+        if oven.state != "IDLE":
+            log.warning("Restart aborted: oven left IDLE during restart delay (state=%s)" % oven.state)
+            return
+        os._exit(0)
+    gevent.spawn_later(0.5, _deferred_restart)
     return {"success": True}
 
 def main():

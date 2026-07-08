@@ -75,11 +75,11 @@ class SettingsManager:
     def _kiln_path(self, name):
         return os.path.join(self.kilns_dir, name + ".json")
 
-    def _require_valid_name(self, name):
+    def _require_valid_name(self, name, field="name"):
         """Reject names that don't match the creation charset BEFORE any
         path construction — CRUD inputs arrive raw from the HTTP layer."""
         if not isinstance(name, str) or not KILN_NAME_RE.match(name):
-            raise SettingsValidationError({"name": "invalid kiln name"})
+            raise SettingsValidationError({field: "invalid kiln name"})
 
     def _load_kiln_overlay(self, name):
         return self._read_json(self._kiln_path(name))
@@ -142,7 +142,7 @@ class SettingsManager:
         if active:
             overlay = self._load_kiln_overlay(active)
             if overlay is None:
-                log.warning("Active kiln '%s' has no settings file; using defaults", active)
+                log.warning("Active kiln '%s' overlay could not be read; using defaults", active)
             else:
                 applied.update(self._apply_overlay(overlay, "kiln"))
         log.info("Applied %d setting override(s); active kiln: %s", len(applied), active)
@@ -278,7 +278,7 @@ class SettingsManager:
             self._validate_kiln_name(name)
             overlay = {}
             if duplicate_from:
-                self._require_valid_name(duplicate_from)
+                self._require_valid_name(duplicate_from, field="duplicate_from")
                 source = self._load_kiln_overlay(duplicate_from)
                 if source is None:
                     raise SettingsValidationError(

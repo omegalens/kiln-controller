@@ -263,6 +263,13 @@ class TestKilnCrud:
             manager.create_kiln("Fine Name", duplicate_from="../global")
         assert not os.path.exists(str(tmp_path / "settings" / "kilns" / "Fine Name.json"))
 
+    def test_duplicate_from_traversal_error_keys_duplicate_from(self, manager, tmp_path):
+        os.makedirs(str(tmp_path / "settings" / "kilns"), exist_ok=True)
+        write_json(str(tmp_path / "settings" / "global.json"), {"kwh_rate": 0.2})
+        with pytest.raises(SettingsValidationError) as exc:
+            manager.create_kiln("Fine Name", duplicate_from="../global")
+        assert "duplicate_from" in exc.value.errors
+
     def test_rename_updates_active_pointer(self, manager):
         manager.create_kiln("Old Name")
         manager.activate_kiln("Old Name")

@@ -278,6 +278,8 @@
       }
     }
 
+    var $saveBtn = $('#btn_save_' + scope);
+    $saveBtn.prop('disabled', true);
     post(API, payload).done(function (resp) {
       var outcomes = resp.outcomes || {};
       var counts = { 'applied': 0, 'applied-next-firing': 0, 'restart-required': 0 };
@@ -293,6 +295,7 @@
       }
       refresh(); // re-renders; banner driven by server-side restart_pending (D115)
     }).fail(function (xhr) {
+      $saveBtn.prop('disabled', false);
       // Per-key errors: mark rows, keep edits so the user can fix them.
       var errors = (xhr.responseJSON || {}).errors || {};
       $('.setting-error').remove();

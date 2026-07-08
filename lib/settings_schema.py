@@ -103,7 +103,7 @@ SETTINGS_SCHEMA = {
                                "help": "Use v2 rate-based control; off = legacy time-based control."},
 
     # ---------------------------------------------------- global scope
-    "seek_start": {"type": "bool", "scope": "global", "apply": "live",
+    "seek_start": {"type": "bool", "scope": "global", "apply": "next-firing",
                    "category": "Firing Behavior", "label": "Seek start",
                    "help": "If the kiln is already hot when a firing starts, skip ahead to the matching point in the schedule."},
     "kwh_rate": {"type": "float", "min": 0.0, "max": 10.0, "scope": "global",
@@ -180,9 +180,6 @@ SETTINGS_SCHEMA = {
     "ac_freq_50hz": {"type": "bool", "scope": "global", "apply": "restart",
                      "category": "Advanced", "label": "50 Hz mains filtering",
                      "help": "Enable if your mains electricity is 50 Hz."},
-    "allow_legacy_profiles": {"type": "bool", "scope": "global", "apply": "live",
-                              "category": "Advanced", "label": "Allow legacy firing profiles",
-                              "help": "Auto-convert v1 firing profiles on load."},
     "mqtt_enabled": {"type": "bool", "scope": "global", "apply": "restart",
                      "category": "MQTT", "label": "MQTT enabled",
                      "help": "Publish kiln status and accept stop/pause/resume over MQTT."},
