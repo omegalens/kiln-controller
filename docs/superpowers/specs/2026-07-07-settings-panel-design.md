@@ -87,7 +87,7 @@ units but are stored in the scale `config.py` documents (file values are in
 | `pid_kp`, `pid_ki`, `pid_kd` | next-firing | `PID()` is rebuilt at each run start |
 | `kw_elements` | live | cost calc |
 | `emergency_shutoff_temp` | live | safety; read every control loop |
-| `thermocouple_offset` | live | |
+| `thermocouple_offset` | restart | cached onto zone objects at construction (`lib/oven.py:63,76`) |
 | `pid_control_window` | live | |
 | `kiln_must_catch_up` | live | |
 | `throttle_below_temp`, `throttle_percent` | live | |
@@ -160,7 +160,7 @@ REST endpoints following the existing `/api` conventions in
 | `/api/settings/kilns` | POST | Create kiln (empty overlay, or `duplicate_from`) |
 | `/api/settings/kilns/<name>` | PUT | Rename |
 | `/api/settings/kilns/<name>` | DELETE | Delete (refused if active) |
-| `/api/settings/kilns/<name>/activate` | POST | Switch active kiln; re-applies overlay stack; IDLE-only |
+| `/api/settings/active_kiln` | POST | `{"name": string\|null}` — switch active kiln (null = back to defaults, so the last kiln remains deletable); re-applies overlay stack; IDLE-only. Response includes `restart_required: true` when a restart-apply kiln key (e.g. `thermocouple_offset`) differs between old and new effective values |
 | `/api/settings/restart` | POST | Clean shutdown for systemd restart; IDLE-only |
 
 Validation failures return HTTP 400 with per-key error messages; nothing is
