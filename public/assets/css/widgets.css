@@ -483,6 +483,9 @@
 
 .controls-right {
   justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.5vw, 14px);
 }
 
 .btn-control {
