@@ -145,3 +145,83 @@ class TestLoadAndApply:
     def test_missing_settings_dir_is_fine(self, manager, cfg):
         manager.load_and_apply()
         assert cfg.pid_kp == 9.8
+
+
+class TestUpdateSettings:
+    def test_live_update_applies_and_persists(self, manager, cfg, tmp_path):
+        outcomes = manager.update_settings("global", {"kwh_rate": 0.30})
+        assert outcomes == {"kwh_rate": "applied"}
+        assert cfg.kwh_rate == 0.30
+        with open(str(tmp_path / "settings" / "global.json")) as f:
+            assert json.load(f) == {"kwh_rate": 0.30}
+
+    @pytest.mark.skip(reason="needs Task 4 kiln CRUD")
+    def test_next_firing_update_applies_immediately(self, manager, cfg):
+        manager.create_kiln("Big Kiln")
+        manager.activate_kiln("Big Kiln")
+        outcomes = manager.update_settings("kiln", {"pid_kp": 11.0})
+        assert outcomes == {"pid_kp": "applied-next-firing"}
+        assert cfg.pid_kp == 11.0
+
+    def test_restart_key_persisted_but_not_applied(self, manager, cfg, tmp_path):
+        outcomes = manager.update_settings("global", {"mqtt_port": 8883})
+        assert outcomes == {"mqtt_port": "restart-required"}
+        assert cfg.mqtt_port == 1883  # running value untouched
+        with open(str(tmp_path / "settings" / "global.json")) as f:
+            assert json.load(f)["mqtt_port"] == 8883
+
+    def test_all_or_nothing_on_any_invalid_value(self, manager, cfg, tmp_path):
+        with pytest.raises(SettingsValidationError) as exc:
+            manager.update_settings("global", {"kwh_rate": 0.3, "mqtt_port": -1})
+        assert "mqtt_port" in exc.value.errors
+        assert cfg.kwh_rate == 0.43  # valid sibling NOT applied
+        assert not os.path.exists(str(tmp_path / "settings" / "global.json"))
+
+    def test_wrong_scope_key_rejected(self, manager):
+        with pytest.raises(SettingsValidationError) as exc:
+            manager.update_settings("global", {"pid_kp": 10.0})
+        assert "pid_kp" in exc.value.errors
+
+    def test_kiln_scope_requires_active_kiln(self, manager):
+        with pytest.raises(SettingsValidationError):
+            manager.update_settings("kiln", {"pid_kp": 10.0})
+
+    @pytest.mark.skip(reason="needs Task 4 kiln CRUD")
+    def test_safety_key_blocked_while_firing(self, manager, cfg):
+        manager.create_kiln("Big Kiln")
+        manager.activate_kiln("Big Kiln")
+        with pytest.raises(SettingsValidationError) as exc:
+            manager.update_settings("kiln", {"emergency_shutoff_temp": 2300},
+                                    oven_state="RUNNING")
+        assert "emergency_shutoff_temp" in exc.value.errors
+        assert cfg.emergency_shutoff_temp == 2264
+
+    def test_ignore_flag_editable_while_firing_with_confirm(self, manager, cfg):
+        outcomes = manager.update_settings(
+            "global", {"ignore_tc_short_errors": True},
+            oven_state="RUNNING", confirm=True)
+        assert outcomes == {"ignore_tc_short_errors": "applied"}
+        assert cfg.ignore_tc_short_errors is True
+
+    def test_ignore_flag_blocked_while_firing_without_confirm(self, manager, cfg):
+        with pytest.raises(SettingsValidationError):
+            manager.update_settings("global", {"ignore_tc_short_errors": True},
+                                    oven_state="RUNNING", confirm=False)
+        assert cfg.ignore_tc_short_errors is False
+
+    def test_reset_removes_override_and_restores_default(self, manager, cfg, tmp_path):
+        manager.update_settings("global", {"kwh_rate": 0.30})
+        outcomes = manager.update_settings("global", {}, reset=["kwh_rate"])
+        assert outcomes == {"kwh_rate": "applied"}
+        assert cfg.kwh_rate == 0.43
+        with open(str(tmp_path / "settings" / "global.json")) as f:
+            assert "kwh_rate" not in json.load(f)
+
+    def test_atomic_write_leaves_no_tmp_file(self, manager, tmp_path):
+        manager.update_settings("global", {"kwh_rate": 0.30})
+        files = os.listdir(str(tmp_path / "settings"))
+        assert not any(f.endswith(".tmp") for f in files)
+
+    def test_invalid_scope_rejected(self, manager):
+        with pytest.raises(SettingsValidationError):
+            manager.update_settings("bogus", {"kwh_rate": 0.3})

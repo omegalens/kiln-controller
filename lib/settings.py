@@ -166,3 +166,84 @@ class SettingsManager:
             log.warning("Active kiln pointer '%s' is dangling; ignoring", name)
             return None
         return name or None
+
+    # ------------------------------------------------- runtime updates
+
+    def update_settings(self, scope, values, reset=None, oven_state="IDLE",
+                        confirm=False):
+        """Validate, persist, and apply a batch of changes. All-or-nothing:
+        any error rejects the entire request (spec D109).
+        Returns {key: "applied" | "applied-next-firing" | "restart-required"}."""
+        reset = reset or []
+        errors = {}
+        coerced_values = {}
+
+        if scope not in ("global", "kiln"):
+            raise SettingsValidationError({"scope": "must be 'global' or 'kiln'"})
+        active = self.get_active_kiln()
+        if scope == "kiln" and not active:
+            raise SettingsValidationError({"scope": "no active kiln settings profile"})
+
+        for key in list(values.keys()) + list(reset):
+            entry = self.schema.get(key)
+            if entry is None:
+                errors[key] = "unknown setting"
+                continue
+            if entry["scope"] != scope:
+                errors[key] = "not a %s-scope setting" % scope
+                continue
+            guard_error = self._guard(entry, oven_state, confirm)
+            if guard_error:
+                errors[key] = guard_error
+
+        for key, value in values.items():
+            if key in errors:
+                continue
+            coerced, error = self.validate_value(key, value)
+            if error:
+                errors[key] = error
+            else:
+                coerced_values[key] = coerced
+
+        if errors:
+            raise SettingsValidationError(errors)
+
+        with self._lock:
+            if scope == "global":
+                path = self.global_file
+                overlay = self._read_json(path) or {}
+            else:
+                path = self._kiln_path(active)
+                overlay = self._read_json(path) or {}
+            for key in reset:
+                overlay.pop(key, None)
+            overlay.update(coerced_values)
+            self._write_json_atomic(path, overlay)
+
+        outcomes = {}
+        for key, value in coerced_values.items():
+            outcomes[key] = self._apply_and_outcome(key, value, oven_state)
+        for key in reset:
+            outcomes[key] = self._apply_and_outcome(key, self.defaults[key], oven_state)
+        return outcomes
+
+    def _guard(self, entry, oven_state, confirm):
+        if not entry.get("safety") or oven_state == "IDLE":
+            return None
+        if entry.get("mid_firing_editable"):
+            if not confirm:
+                return "confirmation required while oven is %s" % oven_state
+            return None
+        return "cannot change a safety setting while oven is %s" % oven_state
+
+    def _apply_and_outcome(self, key, value, oven_state):
+        entry = self.schema[key]
+        old = getattr(self.config, key, None)
+        if entry["apply"] == "restart":
+            log.info("Setting %s=%r persisted (restart required; running value %r)",
+                     key, value, old)
+            return "restart-required"
+        setattr(self.config, key, value)
+        level = logging.WARNING if entry.get("safety") else logging.INFO
+        log.log(level, "Setting %s changed %r -> %r (oven %s)", key, old, value, oven_state)
+        return "applied-next-firing" if entry["apply"] == "next-firing" else "applied"
