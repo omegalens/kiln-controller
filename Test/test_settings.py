@@ -350,3 +350,35 @@ class TestActivateKiln:
         result = manager.activate_kiln("A")
         assert result == {"restart_required": True}
         assert cfg.thermocouple_offset == 0.0  # still not applied at runtime
+
+
+class TestSnapshot:
+    def test_snapshot_shape_and_sources(self, manager, cfg):
+        manager.update_settings("global", {"kwh_rate": 0.30})
+        manager.create_kiln("Big Kiln")
+        manager.activate_kiln("Big Kiln")
+        manager.update_settings("kiln", {"pid_kp": 15.0})
+        snap = manager.snapshot("IDLE")
+        assert snap["values"]["kwh_rate"] == 0.30
+        assert snap["sources"]["kwh_rate"] == "global"
+        assert snap["sources"]["pid_kp"] == "kiln"
+        assert snap["sources"]["emergency_shutoff_temp"] == "default"
+        assert snap["defaults"]["kwh_rate"] == 0.43
+        assert snap["active_kiln"] == "Big Kiln"
+        assert snap["kilns"] == ["Big Kiln"]
+        assert snap["oven_state"] == "IDLE"
+        assert snap["simulate"] is True
+        assert snap["schema"] is manager.schema
+        json.dumps(snap)  # must be JSON-serializable
+
+    def test_pending_reports_unapplied_restart_keys(self, manager, cfg):
+        manager.update_settings("global", {"mqtt_port": 8883})
+        snap = manager.snapshot("IDLE")
+        assert snap["pending"] == {"mqtt_port": 8883}
+        assert snap["restart_pending"] is True
+        assert snap["values"]["mqtt_port"] == 1883  # running value
+
+    def test_no_pending_when_clean(self, manager):
+        snap = manager.snapshot("IDLE")
+        assert snap["pending"] == {}
+        assert snap["restart_pending"] is False

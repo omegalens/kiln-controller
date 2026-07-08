@@ -350,3 +350,53 @@ class SettingsManager:
         log.info("Activated kiln settings profile: %s (restart_required=%s)",
                  name, restart_required)
         return {"restart_required": restart_required}
+
+    # ---------------------------------------------------------- snapshot
+
+    def effective_values(self):
+        return {key: getattr(self.config, key) for key in self.schema}
+
+    def value_sources(self):
+        sources = {key: "default" for key in self.schema}
+        for key in (self._read_json(self.global_file) or {}):
+            if key in sources:
+                sources[key] = "global"
+        active = self.get_active_kiln()
+        if active:
+            for key in (self._load_kiln_overlay(active) or {}):
+                if key in sources:
+                    sources[key] = "kiln"
+        return sources
+
+    def _pending_values(self):
+        """Restart-apply keys whose persisted target differs from the
+        running value. Drives the UI's 'restart required' banner robustly
+        across page reloads."""
+        global_overlay = self._read_json(self.global_file) or {}
+        active = self.get_active_kiln()
+        kiln_overlay = (self._load_kiln_overlay(active) or {}) if active else {}
+        pending = {}
+        for key, entry in self.schema.items():
+            if entry["apply"] != "restart":
+                continue
+            overlay = global_overlay if entry["scope"] == "global" else kiln_overlay
+            target = overlay.get(key, self.defaults[key])
+            if getattr(self.config, key) != target:
+                pending[key] = target
+        return pending
+
+    def snapshot(self, oven_state):
+        pending = self._pending_values()
+        return {
+            "schema": self.schema,
+            "category_order": CATEGORY_ORDER,
+            "values": self.effective_values(),
+            "sources": self.value_sources(),
+            "defaults": self.defaults,
+            "pending": pending,
+            "restart_pending": bool(pending),
+            "active_kiln": self.get_active_kiln(),
+            "kilns": self.list_kilns(),
+            "oven_state": oven_state,
+            "simulate": bool(getattr(self.config, "simulate", False)),
+        }
