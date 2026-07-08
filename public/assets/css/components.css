@@ -540,3 +540,22 @@
     margin-top: var(--spacing-md);
   }
 }
+
+/* Gear link to the settings page (in the Data Insights title bar) */
+.widget-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-gear {
+  font-size: 1.1em;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: var(--btn-radius-sm);
+  text-decoration: none;
+  color: inherit;
+  opacity: 0.6;
+}
+.settings-gear:hover,
+.settings-gear:focus { opacity: 1; text-decoration: none; }

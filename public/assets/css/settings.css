@@ -1,0 +1,134 @@
+/* Settings page — schema-driven form layout.
+   Rows are a two-column grid (label+help | control) that stacks below 480px. */
+
+.settings-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-title { margin: 0; flex: 1; }
+
+.settings-oven-state {
+  font-size: 0.8em;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.restart-banner {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--widget-radius-sm);
+  background: rgba(243, 156, 18, 0.12);
+  border: 1px solid var(--led-hazard);
+}
+
+.kiln-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.kiln-bar select { min-width: 160px; flex: 1 1 160px; }
+
+.active-kiln-label { font-size: 0.7em; opacity: 0.8; margin-left: 8px; }
+
+.settings-hint { opacity: 0.7; font-size: 0.9em; margin: 4px 0 10px; }
+
+.settings-category { margin: 18px 0 6px; }
+.settings-category h3 {
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.75;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--border-widget);
+  padding-bottom: 4px;
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: 4px 16px;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.setting-row.setting-dirty { background: rgba(255, 255, 0, 0.04); }
+
+.setting-label { font-weight: 600; }
+
+.setting-source {
+  font-size: 0.7em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+  background: var(--bg-input);
+  opacity: 0.8;
+}
+.setting-source.source-kiln { background: var(--accent-secondary-dim); }
+.setting-source.source-global { background: var(--led-cool-glow); }
+.setting-source.source-pending { background: var(--led-hazard); }
+
+.setting-help { font-size: 0.8em; opacity: 0.65; margin: 2px 0 0; }
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.setting-control input[type="number"],
+.setting-control input[type="text"],
+.setting-control input[type="password"],
+.setting-control select {
+  width: 120px;
+  max-width: 100%;
+}
+
+.setting-unit { font-size: 0.85em; opacity: 0.7; min-width: 2.5em; }
+
+.setting-reset {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.5;
+  font-size: 0.85em;
+}
+.setting-reset:hover { opacity: 1; }
+
+.setting-error { color: var(--accent-danger-bright); font-size: 0.8em; grid-column: 1 / -1; }
+
+.settings-save-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-widget);
+}
+
+@media (max-width: 480px) {
+  .setting-row { grid-template-columns: 1fr; }
+  .setting-control { justify-content: flex-start; }
+  .kiln-bar .btn { flex: 1 1 auto; }
+}

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <title>Kiln Controller — Settings</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <script src="assets/js/jquery-1.10.2.min.js"></script>
+  <script src="assets/js/bootstrap.min.js"></script>
+  <script src="assets/js/jquery.bootstrap-growl.min.js"></script>
+  <script src="assets/js/settings.js"></script>
+
+  <link rel="stylesheet" href="assets/css/variables.css" />
+  <link rel="stylesheet" href="assets/css/layout.css" />
+  <link rel="stylesheet" href="assets/css/widgets.css" />
+  <link rel="stylesheet" href="assets/css/components.css" />
+  <link rel="stylesheet" href="assets/css/settings.css" />
+  <link rel="stylesheet" href="assets/css/responsive.css" />
+</head>
+
+<body class="kiln-dashboard settings-page">
+  <main class="settings-main">
+    <header class="settings-header">
+      <a href="index.html" class="btn btn-secondary settings-back">&larr; Dashboard</a>
+      <h1 class="settings-title">Settings</h1>
+      <span class="settings-oven-state" id="oven-state-chip">—</span>
+    </header>
+
+    <div id="restart-banner" class="restart-banner" style="display:none;">
+      <span>Some saved changes need a server restart to take effect.</span>
+      <button id="btn_restart" class="btn btn-danger">Restart Controller</button>
+      <span id="restart-status"></span>
+    </div>
+
+    <section class="widget settings-widget">
+      <h2 class="widget-title">Kiln
+        <span id="active-kiln-label" class="active-kiln-label"></span>
+      </h2>
+      <div class="widget-content">
+        <div class="kiln-bar">
+          <select id="kiln-select" class="form-input"></select>
+          <button id="btn_kiln_activate" class="btn btn-success">Activate</button>
+          <button id="btn_kiln_new" class="btn btn-icon">+ New</button>
+          <button id="btn_kiln_dup" class="btn btn-icon">Duplicate</button>
+          <button id="btn_kiln_rename" class="btn btn-icon">Rename</button>
+          <button id="btn_kiln_delete" class="btn btn-danger">Delete</button>
+        </div>
+        <p id="kiln-bar-hint" class="settings-hint" style="display:none;"></p>
+        <div id="kiln-settings"></div>
+        <div class="settings-save-row">
+          <button id="btn_save_kiln" class="btn btn-success" disabled>Save Kiln Settings</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="widget settings-widget">
+      <h2 class="widget-title">Global</h2>
+      <div class="widget-content">
+        <div id="global-settings"></div>
+        <div class="settings-save-row">
+          <button id="btn_save_global" class="btn btn-success" disabled>Save Global Settings</button>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+
+</html>
