@@ -155,7 +155,6 @@ class TestUpdateSettings:
         with open(str(tmp_path / "settings" / "global.json")) as f:
             assert json.load(f) == {"kwh_rate": 0.30}
 
-    @pytest.mark.skip(reason="needs Task 4 kiln CRUD")
     def test_next_firing_update_applies_immediately(self, manager, cfg):
         manager.create_kiln("Big Kiln")
         manager.activate_kiln("Big Kiln")
@@ -186,7 +185,6 @@ class TestUpdateSettings:
         with pytest.raises(SettingsValidationError):
             manager.update_settings("kiln", {"pid_kp": 10.0})
 
-    @pytest.mark.skip(reason="needs Task 4 kiln CRUD")
     def test_safety_key_blocked_while_firing(self, manager, cfg):
         manager.create_kiln("Big Kiln")
         manager.activate_kiln("Big Kiln")
@@ -225,3 +223,91 @@ class TestUpdateSettings:
     def test_invalid_scope_rejected(self, manager):
         with pytest.raises(SettingsValidationError):
             manager.update_settings("bogus", {"kwh_rate": 0.3})
+
+
+class TestKilnCrud:
+    def test_create_and_list(self, manager):
+        manager.create_kiln("Big Kiln")
+        manager.create_kiln("test-kiln")
+        assert manager.list_kilns() == ["Big Kiln", "test-kiln"]
+
+    def test_create_rejects_bad_names(self, manager):
+        for bad in ("", "  ", "a/b", "..", "x" * 41, "name.with.dots", None):
+            with pytest.raises(SettingsValidationError):
+                manager.create_kiln(bad)
+
+    def test_create_rejects_duplicate_case_insensitive(self, manager):
+        manager.create_kiln("Big Kiln")
+        with pytest.raises(SettingsValidationError):
+            manager.create_kiln("big kiln")
+
+    def test_duplicate_from_copies_overlay(self, manager, cfg):
+        manager.create_kiln("Big Kiln")
+        manager.activate_kiln("Big Kiln")
+        manager.update_settings("kiln", {"pid_kp": 15.0})
+        manager.create_kiln("Copy", duplicate_from="Big Kiln")
+        manager.activate_kiln("Copy")
+        assert cfg.pid_kp == 15.0
+
+    def test_duplicate_from_missing_source(self, manager):
+        with pytest.raises(SettingsValidationError):
+            manager.create_kiln("Copy", duplicate_from="Nope")
+
+    def test_rename_updates_active_pointer(self, manager):
+        manager.create_kiln("Old Name")
+        manager.activate_kiln("Old Name")
+        manager.rename_kiln("Old Name", "New Name")
+        assert manager.get_active_kiln() == "New Name"
+        assert manager.list_kilns() == ["New Name"]
+
+    def test_delete_active_refused(self, manager):
+        manager.create_kiln("Big Kiln")
+        manager.activate_kiln("Big Kiln")
+        with pytest.raises(SettingsValidationError):
+            manager.delete_kiln("Big Kiln")
+
+    def test_delete_missing_refused(self, manager):
+        with pytest.raises(SettingsValidationError):
+            manager.delete_kiln("Nope")
+
+
+class TestActivateKiln:
+    def test_activate_applies_overlay_and_reverts_missing_keys(self, manager, cfg):
+        manager.create_kiln("A")
+        manager.activate_kiln("A")
+        manager.update_settings("kiln", {"pid_kp": 15.0, "emergency_shutoff_temp": 2000})
+        manager.create_kiln("B")
+        manager.activate_kiln("B")  # B has an empty overlay
+        assert cfg.pid_kp == 9.8               # reverted to default
+        assert cfg.emergency_shutoff_temp == 2264
+
+    def test_activate_null_returns_to_defaults(self, manager, cfg):
+        manager.create_kiln("A")
+        manager.activate_kiln("A")
+        manager.update_settings("kiln", {"pid_kp": 15.0})
+        result = manager.activate_kiln(None)
+        assert cfg.pid_kp == 9.8
+        assert manager.get_active_kiln() is None
+        assert result == {"restart_required": False}
+
+    def test_activate_blocked_while_firing(self, manager):
+        manager.create_kiln("A")
+        with pytest.raises(SettingsValidationError):
+            manager.activate_kiln("A", oven_state="RUNNING")
+
+    def test_activate_missing_kiln(self, manager):
+        with pytest.raises(SettingsValidationError):
+            manager.activate_kiln("Nope")
+
+    def test_activate_reports_restart_required_for_restart_keys(self, manager, cfg):
+        # thermocouple_offset is a restart-apply kiln key: switching to a kiln
+        # with a different offset must NOT setattr it, and must report it.
+        manager.create_kiln("A")
+        manager.activate_kiln("A")
+        manager.update_settings("kiln", {"thermocouple_offset": -4.0})
+        assert cfg.thermocouple_offset == 0.0  # persisted, not applied
+        result = manager.activate_kiln(None)
+        assert result == {"restart_required": False}  # running value already matches defaults
+        result = manager.activate_kiln("A")
+        assert result == {"restart_required": True}
+        assert cfg.thermocouple_offset == 0.0  # still not applied at runtime

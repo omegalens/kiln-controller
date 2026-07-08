@@ -247,3 +247,96 @@ class SettingsManager:
         level = logging.WARNING if entry.get("safety") else logging.INFO
         log.log(level, "Setting %s changed %r -> %r (oven %s)", key, old, value, oven_state)
         return "applied-next-firing" if entry["apply"] == "next-firing" else "applied"
+
+    # ------------------------------------------- kiln settings profiles
+
+    def list_kilns(self):
+        try:
+            files = os.listdir(self.kilns_dir)
+        except FileNotFoundError:
+            return []
+        return sorted(f[:-5] for f in files if f.endswith(".json"))
+
+    def _validate_kiln_name(self, name):
+        if not isinstance(name, str) or not KILN_NAME_RE.match(name):
+            raise SettingsValidationError(
+                {"name": "1-40 characters: letters, numbers, spaces, - or _; "
+                         "must start with a letter or number"})
+        for existing in self.list_kilns():
+            if existing.lower() == name.lower():
+                raise SettingsValidationError(
+                    {"name": "a kiln named '%s' already exists" % existing})
+
+    def create_kiln(self, name, duplicate_from=None):
+        with self._lock:
+            self._validate_kiln_name(name)
+            overlay = {}
+            if duplicate_from:
+                source = self._load_kiln_overlay(duplicate_from)
+                if source is None:
+                    raise SettingsValidationError(
+                        {"duplicate_from": "kiln '%s' not found" % duplicate_from})
+                overlay = dict(source)
+            self._write_json_atomic(self._kiln_path(name), overlay)
+            log.info("Created kiln settings profile '%s'%s", name,
+                     " (copy of '%s')" % duplicate_from if duplicate_from else "")
+        return name
+
+    def rename_kiln(self, old, new):
+        with self._lock:
+            if not os.path.exists(self._kiln_path(old)):
+                raise SettingsValidationError({"name": "kiln '%s' not found" % old})
+            if not isinstance(new, str) or not KILN_NAME_RE.match(new):
+                raise SettingsValidationError({"name": "invalid name"})
+            if old.lower() != new.lower():
+                # Full uniqueness check; skipped for pure case-change renames
+                # of the same kiln.
+                self._validate_kiln_name(new)
+            pointer = self._read_json(self.active_file) or {}
+            os.replace(self._kiln_path(old), self._kiln_path(new))
+            if pointer.get("active") == old:
+                self._write_json_atomic(self.active_file, {"active": new})
+            log.info("Renamed kiln settings profile '%s' -> '%s'", old, new)
+
+    def delete_kiln(self, name):
+        with self._lock:
+            if name == self.get_active_kiln():
+                raise SettingsValidationError(
+                    {"name": "cannot delete the active kiln settings profile"})
+            try:
+                os.remove(self._kiln_path(name))
+            except FileNotFoundError:
+                raise SettingsValidationError({"name": "kiln '%s' not found" % name})
+            log.info("Deleted kiln settings profile '%s'", name)
+
+    def activate_kiln(self, name, oven_state="IDLE"):
+        """Switch the active kiln settings profile (None = defaults only).
+        Applies live/next-firing kiln keys immediately; restart-apply kiln
+        keys are never setattr'd at runtime — the return value reports
+        whether any of them differ from the running values."""
+        if oven_state != "IDLE":
+            raise SettingsValidationError(
+                {"state": "cannot switch kilns while oven is %s" % oven_state})
+        with self._lock:
+            if name is not None and not os.path.exists(self._kiln_path(name)):
+                raise SettingsValidationError({"name": "kiln '%s' not found" % name})
+            self._write_json_atomic(self.active_file, {"active": name})
+            overlay = (self._load_kiln_overlay(name) or {}) if name else {}
+            restart_required = False
+            for key, entry in self.schema.items():
+                if entry["scope"] != "kiln":
+                    continue
+                target = overlay.get(key, self.defaults[key])
+                coerced, error = self.validate_value(key, target)
+                if error:
+                    log.warning("Ignoring invalid value %s=%r in kiln '%s': %s",
+                                key, target, name, error)
+                    coerced = self.defaults[key]
+                if entry["apply"] == "restart":
+                    if getattr(self.config, key) != coerced:
+                        restart_required = True
+                    continue
+                setattr(self.config, key, coerced)
+        log.info("Activated kiln settings profile: %s (restart_required=%s)",
+                 name, restart_required)
+        return {"restart_required": restart_required}
