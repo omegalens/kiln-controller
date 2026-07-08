@@ -1,0 +1,19 @@
+# deploy/kiln-controller.service
+# Reference unit for the Raspberry Pi. Install:
+#   sudo cp deploy/kiln-controller.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl restart kiln-controller
+# Restart=always is REQUIRED for the GUI restart button (the server exits
+# cleanly and relies on systemd to come back up) and also fixes crash
+# recovery, which the previous unit lacked.
+[Unit]
+Description=kiln-controller
+After=network.target
+
+[Service]
+User=user
+ExecStart=/home/user/kiln-controller/venv/bin/python /home/user/kiln-controller/kiln-controller.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
